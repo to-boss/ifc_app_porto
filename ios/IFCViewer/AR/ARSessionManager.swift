@@ -10,8 +10,12 @@ enum ARState {
     case coaching
     case aligning
     case calibrating
-    case loading
-    case contentPlaced
+    case loading           // loading room IFC
+    case previewing        // ghost preview of room
+    case roomPlaced        // room placed, show fixture picker
+    case fixtureLoading    // loading a fixture IFC
+    case fixturePreviewing // ghost preview of fixture
+    case done              // all models placed
 }
 
 @MainActor
@@ -21,6 +25,16 @@ class ARSessionManager: ObservableObject {
     @Published var alignmentPointCount: Int = 0
     @Published var loadingError: String?
     @Published var debugLog: [String] = []
+    @Published var modelScale: Float = 1.0 {
+        didSet { applyPreviewTransform() }
+    }
+    @Published var modelRotation: Float = 0 {
+        didSet { applyPreviewTransform() }
+    }
+    @Published var selectedElement: ElementInfo?
+    @Published var selectedScreenPoint: CGPoint = .zero
+    @Published var showingDetails: Bool = false
+    @Published var exportFileURL: URL?
 
     func log(_ msg: String) {
         logger.info("\(msg)")
@@ -38,7 +52,24 @@ class ARSessionManager: ObservableObject {
     private var alignmentMarkers: [AnchorEntity] = []
     private var alignmentLine: AnchorEntity?
 
-    private var modelAnchor: AnchorEntity?
+    private var roomAnchor: AnchorEntity?
+    private var roomEntity: Entity?
+
+    struct PlacedFixture {
+        let anchor: AnchorEntity
+        let filename: String
+    }
+    private var placedFixtures: [PlacedFixture] = []
+    private var pendingFixtureFilename: String?
+
+    private var previewAnchor: AnchorEntity?
+    private var previewEntity: Entity?
+    private var originalMaterials: [(ModelEntity, [Material])] = []
+
+    /// Maps IFC element id → metadata for all loaded models
+    private var elementMetadata: [UInt64: ValidatedElement] = [:]
+    /// The tapped entity, used to track its screen position
+    private var selectedEntityRef: Entity?
 
     let gridSpacing: Float = 0.5
 
@@ -89,7 +120,59 @@ class ARSessionManager: ObservableObject {
 
         if state == .aligning {
             handleAlignmentTap(at: point)
+            return
         }
+
+        // Entity tap detection when models are placed
+        if state == .roomPlaced || state == .done {
+            // If action menu is showing, dismiss it
+            if selectedElement != nil {
+                selectedElement = nil
+                selectedEntityRef = nil
+                showingDetails = false
+                return
+            }
+
+            // Hit-test against placed entities
+            let hits = arView.entities(at: point)
+            for entity in hits {
+                // Walk up to find a named ifc_ entity
+                var current: Entity? = entity
+                while let e = current {
+                    if e.name.hasPrefix("ifc_"),
+                       let idStr = e.name.split(separator: "_").last,
+                       let id = UInt64(idStr),
+                       let meta = elementMetadata[id] {
+                        // Find the owning anchor
+                        if let anchor = findOwningAnchor(for: e) {
+                            selectedEntityRef = anchor
+                            selectedScreenPoint = point
+                            selectedElement = ElementInfo(
+                                id: id,
+                                ifcType: meta.ifcType,
+                                name: meta.name,
+                                properties: meta.properties,
+                                anchor: anchor
+                            )
+                            log("Selected: \(meta.ifcType) #\(id)")
+                            return
+                        }
+                    }
+                    current = e.parent
+                }
+            }
+        }
+    }
+
+    private func findOwningAnchor(for entity: Entity) -> AnchorEntity? {
+        var current: Entity? = entity
+        while let e = current {
+            if let anchor = e as? AnchorEntity {
+                return anchor
+            }
+            current = e.parent
+        }
+        return nil
     }
 
     // MARK: - 2-Point Wall Alignment
@@ -202,39 +285,38 @@ class ARSessionManager: ObservableObject {
     func confirmAlignment() {
         clearAlignmentVisuals()
         state = .loading
-        loadIFCModel()
+        loadModel(named: "BaseRoom-v2")
     }
 
     // MARK: - IFC Model Loading
 
-    private func loadIFCModel() {
+    private func loadModel(named filename: String) {
         loadingError = nil
-        log("Starting IFC model load...")
+        log("Loading \(filename)...")
         IFCLoader.onLog = { [weak self] msg in self?.log(msg) }
 
-        // Phase 1: Parse on background thread
-        // Phase 2: Build meshes on main thread (MeshResource requires @MainActor)
+        let targetState: ARState = (state == .loading) ? .previewing : .fixturePreviewing
+
         Task.detached {
             do {
-                let elements = try await IFCLoader.parseAndValidate(named: "Objekt_WC")
-
-                // Hop to main actor for mesh building + scene placement
+                let elements = try await IFCLoader.parseAndValidate(named: filename)
                 await MainActor.run {
-                    self.finishLoading(elements)
+                    self.finishLoading(elements, targetState: targetState)
                 }
             } catch {
                 await MainActor.run {
                     self.log("FAILED: \(error)")
                     self.loadingError = "\(error)"
-                    self.state = .contentPlaced
+                    self.state = .roomPlaced
                 }
             }
         }
     }
 
-    private func finishLoading(_ elements: [ValidatedElement]) {
+    private func finishLoading(_ elements: [ValidatedElement], targetState: ARState) {
         do {
-            let entity = try IFCLoader.buildEntities(from: elements)
+            let (entity, metadata) = try IFCLoader.buildEntities(from: elements)
+            elementMetadata.merge(metadata) { _, new in new }
             log("Built \(entity.children.count) mesh children")
 
             guard let arView = arView else {
@@ -246,19 +328,216 @@ class ARSessionManager: ObservableObject {
                 return
             }
 
-            log("Placing at \(floorAnchor.position), rot=\(gridRotation)")
+            // Store original materials before applying ghost effect
+            originalMaterials = IFCLoader.collectMaterials(from: entity)
+            IFCLoader.applyGhostEffect(to: entity)
+
+            // Place as ghost preview at camera position
             let anchor = AnchorEntity(world: floorAnchor.position)
-            anchor.orientation = simd_quatf(angle: gridRotation, axis: SIMD3(0, 1, 0))
             anchor.addChild(entity)
             arView.scene.addAnchor(anchor)
-            modelAnchor = anchor
 
-            log("Model placed OK")
-            state = .contentPlaced
+            previewAnchor = anchor
+            previewEntity = entity
+            modelScale = 1.0
+            modelRotation = 0
+            applyPreviewTransform()
+
+            log("Preview ghost active — move camera to position, adjust scale/rotation, then Place")
+            state = targetState
         } catch {
             log("FAILED: \(error)")
             loadingError = "\(error)"
-            state = .contentPlaced
+            state = .roomPlaced
+        }
+    }
+
+    // MARK: - Fixture Loading
+
+    func loadFixture(named filename: String) {
+        pendingFixtureFilename = filename
+        state = .fixtureLoading
+        loadModel(named: filename)
+    }
+
+    // MARK: - Preview
+
+    func updatePreviewPosition() {
+        guard let arView = arView else { return }
+
+        // Update preview anchor position
+        if state == .previewing || state == .fixturePreviewing {
+            let center = CGPoint(x: arView.bounds.midX, y: arView.bounds.midY)
+            let results = arView.raycast(from: center, allowing: .existingPlaneGeometry, alignment: .horizontal)
+            if let result = results.first {
+                let col = result.worldTransform.columns.3
+                previewAnchor?.position = SIMD3<Float>(col.x, col.y, col.z)
+            }
+        }
+
+        // Track selected entity screen position for the bubble
+        if let entity = selectedEntityRef, selectedElement != nil {
+            let worldPos = entity.position(relativeTo: nil)
+            if let screenPt = arView.project(worldPos) {
+                selectedScreenPoint = CGPoint(x: CGFloat(screenPt.x), y: CGFloat(screenPt.y))
+            }
+        }
+    }
+
+    private func applyPreviewTransform() {
+        previewEntity?.scale = SIMD3<Float>(repeating: modelScale)
+        previewEntity?.orientation = simd_quatf(angle: gridRotation + modelRotation, axis: SIMD3(0, 1, 0))
+    }
+
+    func placeRoom() {
+        guard state == .previewing, let anchor = previewAnchor, let entity = previewEntity else { return }
+
+        IFCLoader.restoreMaterials(originalMaterials)
+        originalMaterials = []
+
+        roomAnchor = anchor
+        roomEntity = entity
+        previewAnchor = nil
+        previewEntity = nil
+
+        log("Room placed at \(anchor.position)")
+        state = .roomPlaced
+    }
+
+    func placeFixture() {
+        guard state == .fixturePreviewing, let anchor = previewAnchor else { return }
+
+        // Restore original opaque materials for the fixture
+        IFCLoader.restoreMaterials(originalMaterials)
+        originalMaterials = []
+
+        let filename = pendingFixtureFilename ?? "unknown"
+        placedFixtures.append(PlacedFixture(anchor: anchor, filename: filename))
+        pendingFixtureFilename = nil
+        previewAnchor = nil
+        previewEntity = nil
+
+        log("Fixture placed at \(anchor.position)")
+        state = .roomPlaced
+    }
+
+    func finishSession() {
+        state = .done
+        log("Session complete")
+    }
+
+    // MARK: - Element Actions (Move / Details / Delete)
+
+    func moveSelectedElement() {
+        guard let info = selectedElement else { return }
+        let anchor = info.anchor
+
+        // Remove from placed list
+        placedFixtures.removeAll { $0.anchor === anchor }
+
+        // Get the root entity (first child of anchor)
+        guard let entity = anchor.children.first else {
+            selectedElement = nil
+            return
+        }
+
+        // Apply ghost effect for preview
+        originalMaterials = IFCLoader.collectMaterials(from: entity)
+        IFCLoader.applyGhostEffect(to: entity)
+
+        previewAnchor = anchor
+        previewEntity = entity
+        modelScale = entity.scale.x
+        modelRotation = 0
+        selectedElement = nil
+        selectedEntityRef = nil
+
+        state = .fixturePreviewing
+        log("Moving element \(info.ifcType) #\(info.id)")
+    }
+
+    func showDetails() {
+        showingDetails = true
+    }
+
+    func deleteSelectedElement() {
+        guard let info = selectedElement else { return }
+        let anchor = info.anchor
+
+        arView?.scene.removeAnchor(anchor)
+        placedFixtures.removeAll { $0.anchor === anchor }
+
+        log("Deleted \(info.ifcType) #\(info.id)")
+        selectedElement = nil
+        selectedEntityRef = nil
+    }
+
+    func dismissSelection() {
+        selectedElement = nil
+        selectedEntityRef = nil
+        showingDetails = false
+    }
+
+    // MARK: - Export
+
+    func exportMergedIFC() {
+        guard let roomAnchor = roomAnchor else {
+            log("No room placed")
+            return
+        }
+
+        // Read room IFC as Data
+        guard let roomURL = Bundle.main.url(forResource: "BaseRoom-v2", withExtension: "ifc"),
+              let roomData = try? Data(contentsOf: roomURL) else {
+            log("Failed to read room IFC")
+            return
+        }
+
+        // Build fixture inputs
+        var fixtureInputs: [FixtureExportInput] = []
+        let roomPos = roomAnchor.position
+
+        log("placedFixtures count: \(placedFixtures.count)")
+        for fixture in placedFixtures {
+            guard let fixtureURL = Bundle.main.url(forResource: fixture.filename, withExtension: "ifc"),
+                  let fixtureData = try? Data(contentsOf: fixtureURL) else {
+                log("Failed to read \(fixture.filename).ifc")
+                continue
+            }
+
+            // Get fixture position relative to room
+            let pos = fixture.anchor.position
+            let relX = pos.x - roomPos.x
+            let relY = pos.y - roomPos.y
+            let relZ = pos.z - roomPos.z
+
+            // Get rotation from the entity's orientation
+            let entity = fixture.anchor.children.first
+            let angle = entity?.orientation.angle ?? 0
+
+            fixtureInputs.append(FixtureExportInput(
+                ifcData: fixtureData,
+                relX: relX,
+                relY: relY,
+                relZ: relZ,
+                rotationY: angle
+            ))
+        }
+
+        log("Exporting \(fixtureInputs.count) fixtures + room as fresh IFC4...")
+
+        do {
+            let ifcText = try exportCombinedIfc(roomData: roomData, fixtures: fixtureInputs)
+
+            // Write to temp file
+            let tempDir = FileManager.default.temporaryDirectory
+            let filename = "IFC-AR-Export.ifc"
+            let fileURL = tempDir.appendingPathComponent(filename)
+            try ifcText.write(to: fileURL, atomically: true, encoding: .utf8)
+            log("Exported \(fileURL.lastPathComponent) (\(ifcText.count) bytes)")
+            exportFileURL = fileURL
+        } catch {
+            log("Export failed: \(error)")
         }
     }
 
@@ -277,10 +556,28 @@ class ARSessionManager: ObservableObject {
     // MARK: - Reset
 
     func reset() {
-        if let anchor = modelAnchor {
+        if let anchor = roomAnchor {
             arView?.scene.removeAnchor(anchor)
-            modelAnchor = nil
+            roomAnchor = nil
         }
+        roomEntity = nil
+        for fixture in placedFixtures {
+            arView?.scene.removeAnchor(fixture.anchor)
+        }
+        placedFixtures.removeAll()
+        if let anchor = previewAnchor {
+            arView?.scene.removeAnchor(anchor)
+            previewAnchor = nil
+        }
+        previewEntity = nil
+        originalMaterials = []
+        elementMetadata = [:]
+        selectedElement = nil
+        selectedEntityRef = nil
+        showingDetails = false
+        modelScale = 1.0
+        modelRotation = 0
+
         clearAlignmentVisuals()
         loadingError = nil
 

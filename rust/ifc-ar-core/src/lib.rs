@@ -2,8 +2,10 @@ pub mod color;
 pub mod error;
 pub mod geometry;
 pub mod gltf_export;
+pub mod ifc_export;
 pub mod metadata;
 pub mod parser;
+pub mod properties;
 pub mod types;
 
 use error::IfcArError;
@@ -42,4 +44,34 @@ pub fn parse_ifc(data: Vec<u8>) -> Result<IfcModel, IfcArError> {
         spatial_tree,
         bounds,
     })
+}
+
+/// Generate a fresh IFC4 file combining room + placed fixtures.
+///
+/// Parses each IFC through the geometry pipeline, then writes clean
+/// tessellated geometry into a new IFC4 file.
+pub fn export_combined_ifc(
+    room_data: Vec<u8>,
+    fixtures: Vec<FixtureExportInput>,
+) -> Result<String, IfcArError> {
+    let inputs: Vec<ifc_export::FixtureExportInput> = fixtures
+        .into_iter()
+        .map(|f| ifc_export::FixtureExportInput {
+            ifc_data: f.ifc_data,
+            rel_x: f.rel_x,
+            rel_y: f.rel_y,
+            rel_z: f.rel_z,
+            rotation_y: f.rotation_y,
+        })
+        .collect();
+    ifc_export::export_combined_ifc(&room_data, &inputs)
+}
+
+/// Input for a fixture to export (UniFFI-compatible dictionary).
+pub struct FixtureExportInput {
+    pub ifc_data: Vec<u8>,
+    pub rel_x: f32,
+    pub rel_y: f32,
+    pub rel_z: f32,
+    pub rotation_y: f32,
 }

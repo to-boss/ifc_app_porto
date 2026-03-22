@@ -4,6 +4,9 @@ namespace ifc_ar_core {
 
     [Throws=IfcArError]
     IfcModel parse_ifc(bytes data);
+
+    [Throws=IfcArError]
+    string export_combined_ifc(bytes room_data, sequence<FixtureExportInput> fixtures);
 };
 
 [Error]
@@ -64,4 +67,12 @@ dictionary ModelBounds {
     sequence<float> min_point;
     sequence<float> max_point;
     float diagonal;
+};
+
+dictionary FixtureExportInput {
+    bytes ifc_data;
+    float rel_x;
+    float rel_y;
+    float rel_z;
+    float rotation_y;
 };

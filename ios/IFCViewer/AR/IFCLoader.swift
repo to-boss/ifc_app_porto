@@ -25,10 +25,21 @@ enum IFCLoaderError: Error, LocalizedError {
 struct ValidatedElement: Sendable {
     let id: UInt64
     let ifcType: String
+    let name: String?
     let positions: [Float]
     let normals: [Float]
     let indices: [UInt32]
     let color: (r: Float, g: Float, b: Float, a: Float)
+    let properties: [IfcProperty]
+}
+
+/// Lightweight info for displaying element details after tap.
+struct ElementInfo {
+    let id: UInt64
+    let ifcType: String
+    let name: String?
+    let properties: [IfcProperty]
+    let anchor: AnchorEntity
 }
 
 enum IFCLoader {
@@ -96,10 +107,12 @@ enum IFCLoader {
             validated.append(ValidatedElement(
                 id: element.id,
                 ifcType: element.ifcType,
+                name: element.name,
                 positions: geometry.positions,
                 normals: geometry.normals,
                 indices: geometry.indices,
-                color: (element.color.r, element.color.g, element.color.b, element.color.a)
+                color: (element.color.r, element.color.g, element.color.b, element.color.a),
+                properties: element.properties
             ))
         }
 
@@ -111,8 +124,9 @@ enum IFCLoader {
     }
 
     /// Phase 2: Build RealityKit meshes on MainActor.
+    /// Returns the root entity and a metadata map (element id → ValidatedElement).
     @MainActor
-    static func buildEntities(from elements: [ValidatedElement]) throws -> Entity {
+    static func buildEntities(from elements: [ValidatedElement]) throws -> (Entity, [UInt64: ValidatedElement]) {
         let logFn = onLog
         func log(_ msg: String) {
             logger.info("\(msg)")
@@ -121,6 +135,7 @@ enum IFCLoader {
 
         log("Phase 2: Building \(elements.count) meshes (main thread)")
         let root = Entity()
+        var metadata: [UInt64: ValidatedElement] = [:]
 
         for elem in elements {
             log("Mesh #\(elem.id) \(elem.ifcType)...")
@@ -142,7 +157,14 @@ enum IFCLoader {
                 material.roughness = .init(floatLiteral: 0.8)
 
                 let entity = ModelEntity(mesh: mesh, materials: [material])
+                entity.name = "ifc_\(elem.id)"
+
+                // Add collision for tap detection
+                let shape = ShapeResource.generateConvex(from: mesh)
+                entity.collision = CollisionComponent(shapes: [shape])
+
                 root.addChild(entity)
+                metadata[elem.id] = elem
                 log("OK #\(elem.id)")
             } catch {
                 log("FAIL #\(elem.id): \(error)")
@@ -150,7 +172,45 @@ enum IFCLoader {
         }
 
         log("Phase 2 done: \(root.children.count) meshes built")
-        return root
+        return (root, metadata)
+    }
+
+    // MARK: - Ghost Effect
+
+    @MainActor
+    static func collectMaterials(from entity: Entity) -> [(ModelEntity, [Material])] {
+        var result: [(ModelEntity, [Material])] = []
+        for child in entity.children {
+            if let model = child as? ModelEntity, let materials = model.model?.materials {
+                result.append((model, materials))
+            }
+            result.append(contentsOf: collectMaterials(from: child))
+        }
+        return result
+    }
+
+    @MainActor
+    static func applyGhostEffect(to entity: Entity) {
+        for child in entity.children {
+            if let model = child as? ModelEntity {
+                model.model?.materials = model.model?.materials.map { _ in
+                    var ghost = PhysicallyBasedMaterial()
+                    ghost.baseColor = .init(tint: UIColor(red: 0.6, green: 0.85, blue: 1.0, alpha: 1.0))
+                    ghost.blending = .transparent(opacity: .init(floatLiteral: 0.65))
+                    ghost.metallic = .init(floatLiteral: 0.1)
+                    ghost.roughness = .init(floatLiteral: 0.5)
+                    return ghost as Material
+                } ?? []
+            }
+            applyGhostEffect(to: child)
+        }
+    }
+
+    @MainActor
+    static func restoreMaterials(_ originals: [(ModelEntity, [Material])]) {
+        for (model, materials) in originals {
+            model.model?.materials = materials
+        }
     }
 
     /// Convert raw arrays to MeshResource. Must run on @MainActor.

@@ -14,6 +14,9 @@
 		ACF83AA7B2727EC593332612 /* ARSessionManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = FECB64B299F294F02C45073E /* ARSessionManager.swift */; };
 		BA7DD3F456050B67C42D3DE4 /* FloorGridEntity.swift in Sources */ = {isa = PBXBuildFile; fileRef = B81190815F9F9F55951EC9F6 /* FloorGridEntity.swift */; };
 		C419772B5CBF27E35C31CCF5 /* Objekt_WC.ifc in Resources */ = {isa = PBXBuildFile; fileRef = BAE96894DBFDA734CEB090BB /* Objekt_WC.ifc */; };
+		AA111111111111111111AAA1 /* BaseRoom-v2.ifc in Resources */ = {isa = PBXBuildFile; fileRef = AA222222222222222222AAA2 /* BaseRoom-v2.ifc */; };
+		AA333333333333333333AAA3 /* Objekt_Waschbecken.ifc in Resources */ = {isa = PBXBuildFile; fileRef = AA444444444444444444AAA4 /* Objekt_Waschbecken.ifc */; };
+		AA555555555555555555AAA5 /* Objekt_WC_Beh_.ifc in Resources */ = {isa = PBXBuildFile; fileRef = AA666666666666666666AAA6 /* Objekt_WC_Beh_.ifc */; };
 		D5E417124EE076B89C823EBA /* IFCLoader.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6B151DED304A69F779A5CED0 /* IFCLoader.swift */; };
 /* End PBXBuildFile section */
 
@@ -27,6 +30,9 @@
 		B2628624924339AD6B80B95B /* IFCViewerApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IFCViewerApp.swift; sourceTree = "<group>"; };
 		B81190815F9F9F55951EC9F6 /* FloorGridEntity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FloorGridEntity.swift; sourceTree = "<group>"; };
 		BAE96894DBFDA734CEB090BB /* Objekt_WC.ifc */ = {isa = PBXFileReference; path = Objekt_WC.ifc; sourceTree = "<group>"; };
+		AA222222222222222222AAA2 /* BaseRoom-v2.ifc */ = {isa = PBXFileReference; path = "BaseRoom-v2.ifc"; sourceTree = "<group>"; };
+		AA444444444444444444AAA4 /* Objekt_Waschbecken.ifc */ = {isa = PBXFileReference; path = Objekt_Waschbecken.ifc; sourceTree = "<group>"; };
+		AA666666666666666666AAA6 /* Objekt_WC_Beh_.ifc */ = {isa = PBXFileReference; path = "Objekt_WC_Beh_.ifc"; sourceTree = "<group>"; };
 		FECB64B299F294F02C45073E /* ARSessionManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ARSessionManager.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -54,7 +60,10 @@
 		6C2E518C50C6A65FD69BBA71 /* Resources */ = {
 			isa = PBXGroup;
 			children = (
+				AA222222222222222222AAA2 /* BaseRoom-v2.ifc */,
 				BAE96894DBFDA734CEB090BB /* Objekt_WC.ifc */,
+				AA444444444444444444AAA4 /* Objekt_Waschbecken.ifc */,
+				AA666666666666666666AAA6 /* Objekt_WC_Beh_.ifc */,
 			);
 			path = Resources;
 			sourceTree = "<group>";
@@ -149,6 +158,9 @@
 			buildActionMask = 2147483647;
 			files = (
 				C419772B5CBF27E35C31CCF5 /* Objekt_WC.ifc in Resources */,
+				AA111111111111111111AAA1 /* BaseRoom-v2.ifc in Resources */,
+				AA333333333333333333AAA3 /* Objekt_Waschbecken.ifc in Resources */,
+				AA555555555555555555AAA5 /* Objekt_WC_Beh_.ifc in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

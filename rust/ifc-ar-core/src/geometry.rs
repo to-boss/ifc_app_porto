@@ -18,6 +18,9 @@ pub fn process_geometry(
     // Build style index for color lookup
     let style_map = build_style_index(parsed, &mut decoder);
 
+    // Extract properties for all elements
+    let property_map = crate::properties::extract_properties(parsed, &mut decoder);
+
     // Create geometry router with automatic unit detection
     let router = GeometryRouter::with_units(&parsed.content, &mut decoder);
 
@@ -49,6 +52,11 @@ pub fn process_geometry(
         let name = entity.get_string(2).map(|s| s.to_string());
         let global_id = entity.get_string(0).map(|s| s.to_string());
 
+        let properties = property_map
+            .get(&scanned.id)
+            .cloned()
+            .unwrap_or_default();
+
         elements.push(InternalElement {
             id: scanned.id as u64,
             ifc_type: scanned.ifc_type.clone(),
@@ -56,7 +64,7 @@ pub fn process_geometry(
             global_id,
             geometry: mesh,
             color,
-            properties: Vec::new(),
+            properties,
         });
     }
 

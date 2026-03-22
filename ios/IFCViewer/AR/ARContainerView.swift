@@ -92,6 +92,14 @@ struct ARContainerView: UIViewRepresentable {
             }
         }
 
+        // MARK: - Frame Updates
+
+        func session(_ session: ARSession, didUpdate frame: ARFrame) {
+            Task { @MainActor in
+                arManager.updatePreviewPosition()
+            }
+        }
+
         @objc func handleTap(_ recognizer: UITapGestureRecognizer) {
             guard let arView = recognizer.view as? ARView else { return }
             let point = recognizer.location(in: arView)
