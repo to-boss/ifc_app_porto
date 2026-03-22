@@ -15,6 +15,19 @@ pub struct FixtureExportInput {
     pub rotation_y: f32,
 }
 
+/// Input for a user-created wall to be included in the export.
+pub struct WallExportInput {
+    pub positions: Vec<f32>,
+    pub normals: Vec<f32>,
+    pub indices: Vec<u32>,
+    pub rel_x: f32,
+    pub rel_y: f32,
+    pub rel_z: f32,
+    pub height: f32,
+    pub thickness: f32,
+    pub length: f32,
+}
+
 /// Generate a fresh IFC4 file from parsed room + fixture geometry.
 ///
 /// Parses each IFC through our pipeline, then writes a clean IFC4 file
@@ -162,6 +175,298 @@ pub fn export_combined_ifc(
     writeln!(out, "END-ISO-10303-21;").unwrap();
 
     Ok(out)
+}
+
+/// Generate a fresh IFC4 file from parsed room + fixtures + user-created walls.
+pub fn export_combined_ifc_with_walls(
+    room_data: &[u8],
+    fixtures: &[FixtureExportInput],
+    walls: &[WallExportInput],
+) -> Result<String, IfcArError> {
+    // Parse room
+    let room_parsed = parse_ifc_bytes(room_data)?;
+    let (room_elements, _) = process_geometry(&room_parsed)?;
+
+    // Parse each fixture
+    let mut fixture_groups: Vec<(Vec<InternalElement>, f32, f32, f32, f32)> = Vec::new();
+    for f in fixtures {
+        let parsed = parse_ifc_bytes(&f.ifc_data)?;
+        let (elements, _) = process_geometry(&parsed)?;
+        fixture_groups.push((elements, f.rel_x, f.rel_y, f.rel_z, f.rotation_y));
+    }
+
+    // Generate IFC4 text
+    let mut out = String::with_capacity(512_000);
+    let mut id = IdCounter::new();
+    let mut shared = SharedEntities::new();
+
+    // Header
+    writeln!(out, "ISO-10303-21;").unwrap();
+    writeln!(out, "HEADER;").unwrap();
+    writeln!(out, "FILE_DESCRIPTION(('ViewDefinition [ReferenceView_V1.2]'),'2;1');").unwrap();
+    writeln!(out, "FILE_NAME('AR-Export.ifc','2026-03-22',(''),(''),'','IFC-AR Viewer','');").unwrap();
+    writeln!(out, "FILE_SCHEMA(('IFC4'));").unwrap();
+    writeln!(out, "ENDSEC;").unwrap();
+    writeln!(out, "DATA;").unwrap();
+
+    // Infrastructure (same as export_combined_ifc)
+    let owner = id.next();
+    let app = id.next();
+    let person = id.next();
+    let org = id.next();
+    let person_org = id.next();
+    let ctx = id.next();
+    let sub_ctx = id.next();
+    let units = id.next();
+    let length_unit = id.next();
+    let area_unit = id.next();
+    let volume_unit = id.next();
+    let angle_unit = id.next();
+    let project = id.next();
+    let site = id.next();
+    let building = id.next();
+    let storey = id.next();
+    let origin_pt = id.next();
+    let origin_axis = id.next();
+    let site_placement = id.next();
+    let building_placement = id.next();
+    let storey_placement = id.next();
+    let agg1 = id.next();
+    let agg2 = id.next();
+    let agg3 = id.next();
+
+    writeln!(out, "#{person}=IFCPERSON($,$,'',$,$,$,$,$);").unwrap();
+    writeln!(out, "#{org}=IFCORGANIZATION($,'',$,$,$);").unwrap();
+    writeln!(out, "#{person_org}=IFCPERSONANDORGANIZATION(#{person},#{org},$);").unwrap();
+    writeln!(out, "#{app}=IFCAPPLICATION(#{org},'1.0','IFC-AR Viewer','IFCAR');").unwrap();
+    writeln!(out, "#{owner}=IFCOWNERHISTORY(#{person_org},#{app},$,.NOCHANGE.,$,$,$,0);").unwrap();
+
+    writeln!(out, "#{origin_pt}=IFCCARTESIANPOINT((0.,0.,0.));").unwrap();
+    writeln!(out, "#{origin_axis}=IFCAXIS2PLACEMENT3D(#{origin_pt},$,$);").unwrap();
+    writeln!(out, "#{ctx}=IFCGEOMETRICREPRESENTATIONCONTEXT($,'Model',3,1.E-05,#{origin_axis},$);").unwrap();
+    writeln!(out, "#{sub_ctx}=IFCGEOMETRICREPRESENTATIONSUBCONTEXT('Body','Model',*,*,*,*,#{ctx},$,.MODEL_VIEW.,$);").unwrap();
+
+    writeln!(out, "#{length_unit}=IFCSIUNIT(*,.LENGTHUNIT.,$,.METRE.);").unwrap();
+    writeln!(out, "#{area_unit}=IFCSIUNIT(*,.AREAUNIT.,$,.SQUARE_METRE.);").unwrap();
+    writeln!(out, "#{volume_unit}=IFCSIUNIT(*,.VOLUMEUNIT.,$,.CUBIC_METRE.);").unwrap();
+    writeln!(out, "#{angle_unit}=IFCSIUNIT(*,.PLANEANGLEUNIT.,$,.RADIAN.);").unwrap();
+    writeln!(out, "#{units}=IFCUNITASSIGNMENT((#{length_unit},#{area_unit},#{volume_unit},#{angle_unit}));").unwrap();
+
+    writeln!(out, "#{site_placement}=IFCLOCALPLACEMENT($,#{origin_axis});").unwrap();
+    writeln!(out, "#{building_placement}=IFCLOCALPLACEMENT(#{site_placement},#{origin_axis});").unwrap();
+    writeln!(out, "#{storey_placement}=IFCLOCALPLACEMENT(#{building_placement},#{origin_axis});").unwrap();
+
+    writeln!(out, "#{project}=IFCPROJECT('1000000000000000000000',#{owner},'AR Export',$,$,$,$,(#{ctx}),#{units});").unwrap();
+    writeln!(out, "#{site}=IFCSITE('1000000000000000000001',#{owner},'Site',$,$,#{site_placement},$,$,.ELEMENT.,$,$,$,$,$);").unwrap();
+    writeln!(out, "#{building}=IFCBUILDING('1000000000000000000002',#{owner},'Building',$,$,#{building_placement},$,$,.ELEMENT.,$,$,$);").unwrap();
+    writeln!(out, "#{storey}=IFCBUILDINGSTOREY('1000000000000000000003',#{owner},'Level 0',$,$,#{storey_placement},$,$,.ELEMENT.,0.);").unwrap();
+
+    writeln!(out, "#{agg1}=IFCRELAGGREGATES('2000000000000000000001',#{owner},$,$,#{project},(#{site}));").unwrap();
+    writeln!(out, "#{agg2}=IFCRELAGGREGATES('2000000000000000000002',#{owner},$,$,#{site},(#{building}));").unwrap();
+    writeln!(out, "#{agg3}=IFCRELAGGREGATES('2000000000000000000003',#{owner},$,$,#{building},(#{storey}));").unwrap();
+
+    // Write room elements
+    let mut all_product_ids: Vec<u32> = Vec::new();
+
+    for element in &room_elements {
+        if let Some(ref mesh) = element.geometry {
+            if mesh.positions.is_empty() || mesh.indices.is_empty() {
+                continue;
+            }
+            if let Some(product_id) = write_element(
+                &mut out, &mut id, &mut shared,
+                element, mesh,
+                0.0, 0.0, 0.0, 0.0,
+                owner, sub_ctx, storey_placement,
+            ) {
+                all_product_ids.push(product_id);
+            }
+        }
+    }
+
+    // Write fixture elements
+    for (elements, rel_x, rel_y, rel_z, rot_y) in &fixture_groups {
+        for element in elements {
+            if let Some(ref mesh) = element.geometry {
+                if mesh.positions.is_empty() || mesh.indices.is_empty() {
+                    continue;
+                }
+                if let Some(product_id) = write_element(
+                    &mut out, &mut id, &mut shared,
+                    element, mesh,
+                    *rel_x, *rel_y, *rel_z, *rot_y,
+                    owner, sub_ctx, storey_placement,
+                ) {
+                    all_product_ids.push(product_id);
+                }
+            }
+        }
+    }
+
+    // Write user-created walls
+    for wall in walls {
+        if wall.positions.is_empty() || wall.indices.is_empty() {
+            continue;
+        }
+        if let Some(product_id) = write_wall_element(
+            &mut out, &mut id,
+            wall,
+            owner, sub_ctx, storey_placement,
+        ) {
+            all_product_ids.push(product_id);
+        }
+    }
+
+    // Spatial containment
+    if !all_product_ids.is_empty() {
+        let rel_id = id.next();
+        let products: String = all_product_ids
+            .iter()
+            .map(|id| format!("#{id}"))
+            .collect::<Vec<_>>()
+            .join(",");
+        writeln!(
+            out,
+            "#{rel_id}=IFCRELCONTAINEDINSPATIALSTRUCTURE('3000000000000000000001',#{owner},$,$,({products}),#{storey});"
+        ).unwrap();
+    }
+
+    writeln!(out, "ENDSEC;").unwrap();
+    writeln!(out, "END-ISO-10303-21;").unwrap();
+
+    Ok(out)
+}
+
+/// Write a user-created wall element from raw mesh data.
+fn write_wall_element(
+    out: &mut String,
+    id: &mut IdCounter,
+    wall: &WallExportInput,
+    owner: u32,
+    sub_ctx: u32,
+    storey_placement: u32,
+) -> Option<u32> {
+    let positions = &wall.positions;
+    let indices = &wall.indices;
+
+    if positions.len() < 9 || indices.len() < 3 {
+        return None;
+    }
+
+    let vert_count = positions.len() / 3;
+    let tri_count = indices.len() / 3;
+
+    // Write IFCCARTESIANPOINTLIST3D with AR Y-up → IFC Z-up conversion + offset
+    let pointlist_id = id.next();
+    write!(out, "#{pointlist_id}=IFCCARTESIANPOINTLIST3D((").unwrap();
+    for i in 0..vert_count {
+        let ax = positions[i * 3] + wall.rel_x;
+        let ay = positions[i * 3 + 1] + wall.rel_y;
+        let az = positions[i * 3 + 2] + wall.rel_z;
+
+        // AR Y-up → IFC Z-up: ifc_x = ar_x, ifc_y = -ar_z, ifc_z = ar_y
+        let ix = ax as f64;
+        let iy = -az as f64;
+        let iz = ay as f64;
+
+        if i > 0 {
+            write!(out, ",").unwrap();
+        }
+        write!(out, "({ix},{iy},{iz})").unwrap();
+    }
+    writeln!(out, "));").unwrap();
+
+    // Write IFCTRIANGULATEDFACESET
+    let faceset_id = id.next();
+    write!(out, "#{faceset_id}=IFCTRIANGULATEDFACESET(#{pointlist_id},$,.T.,(").unwrap();
+    for t in 0..tri_count {
+        let i0 = indices[t * 3] + 1;
+        let i1 = indices[t * 3 + 1] + 1;
+        let i2 = indices[t * 3 + 2] + 1;
+        if t > 0 {
+            write!(out, ",").unwrap();
+        }
+        write!(out, "({i0},{i1},{i2})").unwrap();
+    }
+    writeln!(out, "),$);").unwrap();
+
+    // Shape representation
+    let shaperep_id = id.next();
+    writeln!(out, "#{shaperep_id}=IFCSHAPEREPRESENTATION(#{sub_ctx},'Body','Tessellation',(#{faceset_id}));").unwrap();
+
+    let prodshape_id = id.next();
+    writeln!(out, "#{prodshape_id}=IFCPRODUCTDEFINITIONSHAPE($,$,(#{shaperep_id}));").unwrap();
+
+    // Placement
+    let placement_id = id.next();
+    let placement_pt = id.next();
+    let placement_axis = id.next();
+    writeln!(out, "#{placement_pt}=IFCCARTESIANPOINT((0.,0.,0.));").unwrap();
+    writeln!(out, "#{placement_axis}=IFCAXIS2PLACEMENT3D(#{placement_pt},$,$);").unwrap();
+    writeln!(out, "#{placement_id}=IFCLOCALPLACEMENT(#{storey_placement},#{placement_axis});").unwrap();
+
+    // IFCWALL product
+    let product_id = id.next();
+    let guid = format!("W{:021}", product_id);
+    writeln!(
+        out,
+        "#{product_id}=IFCWALL('{guid}',#{owner},'User Wall',$,$,#{placement_id},#{prodshape_id},$,.STANDARD.);"
+    ).unwrap();
+
+    // Wall color style
+    let color_id = id.next();
+    let rendering_id = id.next();
+    let surface_style_id = id.next();
+    let pres_style_id = id.next();
+    let styled_item_id = id.next();
+
+    writeln!(out, "#{color_id}=IFCCOLOURRGB($,0.85,0.83,0.8);").unwrap();
+    writeln!(out, "#{rendering_id}=IFCSURFACESTYLERENDERING(#{color_id},$,$,$,$,$,$,$,.FLAT.);").unwrap();
+    writeln!(out, "#{surface_style_id}=IFCSURFACESTYLE('',.BOTH.,(#{rendering_id}));").unwrap();
+    writeln!(out, "#{pres_style_id}=IFCPRESENTATIONSTYLEASSIGNMENT((#{surface_style_id}));").unwrap();
+    writeln!(out, "#{styled_item_id}=IFCSTYLEDITEM(#{faceset_id},(#{pres_style_id}),$);").unwrap();
+
+    // Material: Concrete
+    let mat_id = id.next();
+    writeln!(out, "#{mat_id}=IFCMATERIAL('Concrete',$,'Concrete');").unwrap();
+    let mat_rel_id = id.next();
+    let mat_rel_guid = format!("M{:021}", mat_rel_id);
+    writeln!(out, "#{mat_rel_id}=IFCRELASSOCIATESMATERIAL('{mat_rel_guid}',#{owner},$,$,(#{product_id}),#{mat_id});").unwrap();
+
+    // Base quantities
+    let height = wall.height as f64;
+    let thickness = wall.thickness as f64;
+    let length = wall.length as f64;
+    let area = length * height;
+    let volume = area * thickness;
+
+    let q_length_id = id.next();
+    writeln!(out, "#{q_length_id}=IFCQUANTITYLENGTH('Length',$,$,{length},$);").unwrap();
+    let q_height_id = id.next();
+    writeln!(out, "#{q_height_id}=IFCQUANTITYLENGTH('Height',$,$,{height},$);").unwrap();
+    let q_width_id = id.next();
+    writeln!(out, "#{q_width_id}=IFCQUANTITYLENGTH('Width',$,$,{thickness},$);").unwrap();
+    let q_area_id = id.next();
+    writeln!(out, "#{q_area_id}=IFCQUANTITYAREA('GrossSideArea',$,$,{area},$);").unwrap();
+    let q_volume_id = id.next();
+    writeln!(out, "#{q_volume_id}=IFCQUANTITYVOLUME('GrossVolume',$,$,{volume},$);").unwrap();
+
+    let qset_id = id.next();
+    let qset_guid = format!("Q{:021}", qset_id);
+    writeln!(out, "#{qset_id}=IFCELEMENTQUANTITY('{qset_guid}',#{owner},'Qto_WallBaseQuantities',$,$,(#{q_length_id},#{q_height_id},#{q_width_id},#{q_area_id},#{q_volume_id}));").unwrap();
+    let qrel_id = id.next();
+    let qrel_guid = format!("D{:021}", qrel_id);
+    writeln!(out, "#{qrel_id}=IFCRELDEFINESBYPROPERTIES('{qrel_guid}',#{owner},$,$,(#{product_id}),#{qset_id});").unwrap();
+
+    // Wall type
+    let type_id = id.next();
+    let type_guid = format!("T{:021}", type_id);
+    writeln!(out, "#{type_id}=IFCWALLTYPE('{type_guid}',#{owner},'Standard Wall',$,$,$,$,$,$,.STANDARD.);").unwrap();
+    let type_rel_id = id.next();
+    let type_rel_guid = format!("Y{:021}", type_rel_id);
+    writeln!(out, "#{type_rel_id}=IFCRELDEFINESBYTYPE('{type_rel_guid}',#{owner},$,$,(#{product_id}),#{type_id});").unwrap();
+
+    Some(product_id)
 }
 
 /// Write a single element's geometry, product entity, and all metadata.

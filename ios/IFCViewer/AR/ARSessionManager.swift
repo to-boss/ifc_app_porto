@@ -15,6 +15,9 @@ enum ARState {
     case roomPlaced        // room placed, show fixture picker
     case fixtureLoading    // loading a fixture IFC
     case fixturePreviewing // ghost preview of fixture
+    case wallStart         // centroid marker follows camera, waiting for Place
+    case wallEnd           // live 3D wall preview, endpoint follows camera
+    case wallAdjust        // both points locked, sliders for height/width
     case done              // all models placed
 }
 
@@ -36,6 +39,12 @@ class ARSessionManager: ObservableObject {
     @Published var showingDetails: Bool = false
     @Published var exportFileURL: URL?
     @Published var bcfIssues: [BCFIssue] = []
+    @Published var wallHeight: Float = 2.5 {
+        didSet { regenerateWallPreview() }
+    }
+    @Published var wallThickness: Float = 0.2 {
+        didSet { regenerateWallPreview() }
+    }
 
     func log(_ msg: String) {
         logger.info("\(msg)")
@@ -71,6 +80,24 @@ class ARSessionManager: ObservableObject {
     private var elementMetadata: [UInt64: ValidatedElement] = [:]
     /// The tapped entity, used to track its screen position
     private var selectedEntityRef: Entity?
+
+    // Wall building
+    private var wallStartPoint: SIMD3<Float>?
+    private var wallEndPoint: SIMD3<Float>?
+    private var wallCentroidMarker: AnchorEntity?
+    private var wallPreviewAnchor: AnchorEntity?
+    private var wallPreviewEntity: ModelEntity?
+    private var wallIdCounter: UInt64 = 900_000
+    private var currentWallElement: IfcElement?
+
+    struct CreatedWall {
+        let anchor: AnchorEntity
+        let element: IfcElement
+        let height: Float
+        let thickness: Float
+        let length: Float
+    }
+    private var createdWalls: [CreatedWall] = []
 
     let gridSpacing: Float = 0.5
 
@@ -377,6 +404,11 @@ class ARSessionManager: ObservableObject {
             }
         }
 
+        // Wall building: update centroid marker and live preview
+        if state == .wallStart || state == .wallEnd {
+            updateWallPreview()
+        }
+
         // Track selected entity screen position for the bubble
         if let entity = selectedEntityRef, selectedElement != nil {
             let worldPos = entity.position(relativeTo: nil)
@@ -468,6 +500,8 @@ class ARSessionManager: ObservableObject {
 
         arView?.scene.removeAnchor(anchor)
         placedFixtures.removeAll { $0.anchor === anchor }
+        createdWalls.removeAll { $0.anchor === anchor }
+        elementMetadata.removeValue(forKey: info.id)
 
         log("Deleted \(info.ifcType) #\(info.id)")
         selectedElement = nil
@@ -478,6 +512,222 @@ class ARSessionManager: ObservableObject {
         selectedElement = nil
         selectedEntityRef = nil
         showingDetails = false
+    }
+
+    // MARK: - Wall Building
+
+    func startWallBuilding() {
+        guard let arView = arView else { return }
+
+        wallStartPoint = nil
+        wallEndPoint = nil
+        wallHeight = 2.5
+        wallThickness = 0.2
+
+        // Create centroid marker
+        var material = UnlitMaterial()
+        material.color = .init(tint: .cyan)
+
+        let disc = MeshResource.generateCylinder(height: 0.005, radius: 0.04)
+        let discEntity = ModelEntity(mesh: disc, materials: [material])
+
+        let sphere = MeshResource.generateSphere(radius: 0.02)
+        let sphereEntity = ModelEntity(mesh: sphere, materials: [material])
+        sphereEntity.position.y = 0.025
+
+        let marker = AnchorEntity(world: .zero)
+        marker.addChild(discEntity)
+        marker.addChild(sphereEntity)
+        arView.scene.addAnchor(marker)
+        wallCentroidMarker = marker
+
+        state = .wallStart
+        log("Wall building: tap Place to set start point")
+    }
+
+    func placeWallStart() {
+        guard state == .wallStart, let marker = wallCentroidMarker else { return }
+        wallStartPoint = marker.position
+        log("Wall start at \(marker.position)")
+        state = .wallEnd
+    }
+
+    func placeWallEnd() {
+        guard state == .wallEnd, let marker = wallCentroidMarker else { return }
+        wallEndPoint = marker.position
+        log("Wall end at \(marker.position)")
+        state = .wallAdjust
+    }
+
+    func confirmWall() {
+        guard state == .wallAdjust,
+              let anchor = wallPreviewAnchor,
+              let entity = wallPreviewEntity,
+              let element = currentWallElement,
+              let startPt = wallStartPoint,
+              let endPt = wallEndPoint else { return }
+
+        // Compute wall length
+        let dx = endPt.x - startPt.x
+        let dz = endPt.z - startPt.z
+        let wallLength = sqrt(dx * dx + dz * dz)
+
+        // Apply opaque wall material
+        var material = PhysicallyBasedMaterial()
+        material.baseColor.tint = UIColor(
+            red: CGFloat(element.color.r),
+            green: CGFloat(element.color.g),
+            blue: CGFloat(element.color.b),
+            alpha: CGFloat(element.color.a)
+        )
+        material.metallic = .init(floatLiteral: 0.0)
+        material.roughness = .init(floatLiteral: 0.8)
+        entity.model?.materials = [material]
+
+        // Register for tap-to-inspect
+        wallIdCounter += 1
+        let wallId = wallIdCounter
+        entity.name = "ifc_\(wallId)"
+
+        let validatedElement = ValidatedElement(
+            id: wallId,
+            ifcType: element.ifcType,
+            name: element.name,
+            globalId: nil,
+            positions: element.geometry?.positions ?? [],
+            normals: element.geometry?.normals ?? [],
+            indices: element.geometry?.indices ?? [],
+            color: (element.color.r, element.color.g, element.color.b, element.color.a),
+            properties: []
+        )
+        elementMetadata[wallId] = validatedElement
+
+        createdWalls.append(CreatedWall(anchor: anchor, element: element, height: wallHeight, thickness: wallThickness, length: wallLength))
+
+        // Cleanup
+        if let marker = wallCentroidMarker {
+            arView?.scene.removeAnchor(marker)
+            wallCentroidMarker = nil
+        }
+        wallPreviewAnchor = nil
+        wallPreviewEntity = nil
+        wallStartPoint = nil
+        wallEndPoint = nil
+        currentWallElement = nil
+
+        log("Wall placed")
+        state = .roomPlaced
+    }
+
+    func cancelWallBuilding() {
+        if let marker = wallCentroidMarker {
+            arView?.scene.removeAnchor(marker)
+            wallCentroidMarker = nil
+        }
+        if let anchor = wallPreviewAnchor {
+            arView?.scene.removeAnchor(anchor)
+            wallPreviewAnchor = nil
+        }
+        wallPreviewEntity = nil
+        wallStartPoint = nil
+        wallEndPoint = nil
+        currentWallElement = nil
+
+        log("Wall building cancelled")
+        state = .roomPlaced
+    }
+
+    private func regenerateWallPreview() {
+        guard (state == .wallAdjust || state == .wallEnd),
+              let startPt = wallStartPoint else { return }
+
+        let endPt: SIMD3<Float>
+        if let locked = wallEndPoint {
+            endPt = locked
+        } else if let marker = wallCentroidMarker {
+            endPt = marker.position
+        } else {
+            return
+        }
+
+        guard let roomAnchor = roomAnchor else { return }
+        let roomPos = roomAnchor.position
+
+        // Compute wall coordinates relative to room anchor
+        let relStartX = startPt.x - roomPos.x
+        let relStartZ = startPt.z - roomPos.z
+        let relEndX = endPt.x - roomPos.x
+        let relEndZ = endPt.z - roomPos.z
+
+        // Generate wall mesh via Rust
+        let element = createWallMesh(
+            startX: relStartX, startZ: relStartZ,
+            endX: relEndX, endZ: relEndZ,
+            height: wallHeight, thickness: wallThickness
+        )
+        currentWallElement = element
+
+        guard let geometry = element.geometry,
+              !geometry.positions.isEmpty else { return }
+
+        do {
+            let mesh = try IFCLoader.convertToMesh(
+                positions: geometry.positions,
+                normals: geometry.normals,
+                indices: geometry.indices
+            )
+
+            // Ghost material for preview
+            var ghost = PhysicallyBasedMaterial()
+            ghost.baseColor = .init(tint: UIColor(red: 0.6, green: 0.85, blue: 1.0, alpha: 1.0))
+            ghost.blending = .transparent(opacity: .init(floatLiteral: 0.65))
+            ghost.metallic = .init(floatLiteral: 0.1)
+            ghost.roughness = .init(floatLiteral: 0.5)
+
+            if let existing = wallPreviewEntity {
+                // Update mesh in place
+                existing.model = ModelComponent(mesh: mesh, materials: [ghost])
+                existing.collision = CollisionComponent(shapes: [ShapeResource.generateConvex(from: mesh)])
+            } else {
+                // Create new entity
+                let entity = ModelEntity(mesh: mesh, materials: [ghost])
+                entity.collision = CollisionComponent(shapes: [ShapeResource.generateConvex(from: mesh)])
+
+                let anchor: AnchorEntity
+                if let existing = wallPreviewAnchor {
+                    anchor = existing
+                    anchor.children.removeAll()
+                } else {
+                    anchor = AnchorEntity(world: roomPos)
+                    arView?.scene.addAnchor(anchor)
+                    wallPreviewAnchor = anchor
+                }
+                anchor.addChild(entity)
+                wallPreviewEntity = entity
+            }
+        } catch {
+            log("Wall preview mesh failed: \(error)")
+        }
+    }
+
+    private func updateWallPreview() {
+        guard let arView = arView else { return }
+
+        let center = CGPoint(x: arView.bounds.midX, y: arView.bounds.midY)
+        let results = arView.raycast(from: center, allowing: .existingPlaneGeometry, alignment: .horizontal)
+        guard let result = results.first else { return }
+        let col = result.worldTransform.columns.3
+        let floorPoint = SIMD3<Float>(col.x, col.y, col.z)
+
+        if state == .wallStart {
+            // Move centroid marker to follow camera
+            wallCentroidMarker?.position = floorPoint
+        } else if state == .wallEnd {
+            // Move centroid marker and regenerate wall preview
+            wallCentroidMarker?.position = floorPoint
+            regenerateWallPreview()
+        }
+        // wallAdjust: no position update needed
     }
 
     // MARK: - Export
@@ -526,10 +776,28 @@ class ARSessionManager: ObservableObject {
             ))
         }
 
-        log("Exporting \(fixtureInputs.count) fixtures + room as fresh IFC4...")
+        // Build wall inputs
+        var wallInputs: [WallExportInput] = []
+        for wall in createdWalls {
+            guard let geometry = wall.element.geometry else { continue }
+            // Wall positions are already relative to room (computed that way in regenerateWallPreview)
+            wallInputs.append(WallExportInput(
+                positions: geometry.positions,
+                normals: geometry.normals,
+                indices: geometry.indices,
+                relX: 0,
+                relY: 0,
+                relZ: 0,
+                height: wall.height,
+                thickness: wall.thickness,
+                length: wall.length
+            ))
+        }
+
+        log("Exporting \(fixtureInputs.count) fixtures + \(wallInputs.count) walls + room as fresh IFC4...")
 
         do {
-            let ifcText = try exportCombinedIfc(roomData: roomData, fixtures: fixtureInputs)
+            let ifcText = try exportCombinedIfcWithWalls(roomData: roomData, fixtures: fixtureInputs, walls: wallInputs)
 
             // Write to temp file
             let tempDir = FileManager.default.temporaryDirectory
@@ -605,6 +873,10 @@ class ARSessionManager: ObservableObject {
             arView?.scene.removeAnchor(fixture.anchor)
         }
         placedFixtures.removeAll()
+        for wall in createdWalls {
+            arView?.scene.removeAnchor(wall.anchor)
+        }
+        createdWalls.removeAll()
         if let anchor = previewAnchor {
             arView?.scene.removeAnchor(anchor)
             previewAnchor = nil
@@ -617,6 +889,20 @@ class ARSessionManager: ObservableObject {
         showingDetails = false
         modelScale = 1.0
         modelRotation = 0
+
+        // Clear wall building state
+        if let marker = wallCentroidMarker {
+            arView?.scene.removeAnchor(marker)
+            wallCentroidMarker = nil
+        }
+        if let anchor = wallPreviewAnchor {
+            arView?.scene.removeAnchor(anchor)
+            wallPreviewAnchor = nil
+        }
+        wallPreviewEntity = nil
+        wallStartPoint = nil
+        wallEndPoint = nil
+        currentWallElement = nil
 
         clearAlignmentVisuals()
         loadingError = nil

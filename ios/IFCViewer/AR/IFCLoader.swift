@@ -218,7 +218,7 @@ enum IFCLoader {
 
     /// Convert raw arrays to MeshResource. Must run on @MainActor.
     @MainActor
-    private static func convertToMesh(
+    static func convertToMesh(
         positions: [Float],
         normals: [Float],
         indices: [UInt32]

@@ -116,6 +116,50 @@ struct ContentView: View {
                                 .background(.green.opacity(0.85), in: Capsule())
                                 .foregroundStyle(.white)
                         }
+                    } else if arManager.state == .wallStart || arManager.state == .wallEnd {
+                        HStack(spacing: 12) {
+                            Button(action: {
+                                if arManager.state == .wallStart {
+                                    arManager.placeWallStart()
+                                } else {
+                                    arManager.placeWallEnd()
+                                }
+                            }) {
+                                Label("Place", systemImage: "mappin.and.ellipse")
+                                    .font(.subheadline)
+                                    .fontWeight(.semibold)
+                                    .padding(.horizontal, 20)
+                                    .padding(.vertical, 12)
+                                    .background(.green.opacity(0.85), in: Capsule())
+                                    .foregroundStyle(.white)
+                            }
+                            Button(action: { arManager.cancelWallBuilding() }) {
+                                Label("Cancel", systemImage: "xmark")
+                                    .font(.subheadline)
+                                    .padding(.horizontal, 16)
+                                    .padding(.vertical, 12)
+                                    .background(.ultraThinMaterial, in: Capsule())
+                            }
+                        }
+                    } else if arManager.state == .wallAdjust {
+                        HStack(spacing: 12) {
+                            Button(action: { arManager.confirmWall() }) {
+                                Label("Confirm", systemImage: "checkmark.circle.fill")
+                                    .font(.subheadline)
+                                    .fontWeight(.semibold)
+                                    .padding(.horizontal, 20)
+                                    .padding(.vertical, 12)
+                                    .background(.green.opacity(0.85), in: Capsule())
+                                    .foregroundStyle(.white)
+                            }
+                            Button(action: { arManager.cancelWallBuilding() }) {
+                                Label("Cancel", systemImage: "xmark")
+                                    .font(.subheadline)
+                                    .padding(.horizontal, 16)
+                                    .padding(.vertical, 12)
+                                    .background(.ultraThinMaterial, in: Capsule())
+                            }
+                        }
                     } else if arManager.state == .roomPlaced {
                         Button(action: { arManager.finishSession() }) {
                             Label("Done", systemImage: "checkmark.seal.fill")
@@ -135,7 +179,7 @@ struct ContentView: View {
 
                     // Secondary actions (right)
                     HStack(spacing: 10) {
-                        if [.calibrating, .previewing, .fixturePreviewing, .roomPlaced, .done].contains(arManager.state) {
+                        if [.calibrating, .previewing, .fixturePreviewing, .roomPlaced, .wallStart, .wallEnd, .wallAdjust, .done].contains(arManager.state) {
                             Button(action: { arManager.reset() }) {
                                 Image(systemName: "arrow.counterclockwise")
                                     .font(.title3)
@@ -179,6 +223,48 @@ struct ContentView: View {
                 }
                 .padding(.horizontal, 16)
                 .padding(.bottom, 20)
+            }
+
+            // Wall dimension sliders
+            if arManager.state == .wallAdjust {
+                // Horizontal width slider at bottom
+                VStack {
+                    Spacer()
+                    HStack(spacing: 8) {
+                        Image(systemName: "arrow.left.and.right")
+                            .foregroundStyle(.secondary)
+                            .frame(width: 20)
+                        Slider(value: $arManager.wallThickness, in: 0.05...1.0)
+                        Text(String(format: "%.0f cm", arManager.wallThickness * 100))
+                            .font(.system(size: 13, design: .monospaced))
+                            .frame(width: 55)
+                    }
+                    .padding(16)
+                    .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16))
+                    .padding(.horizontal, 20)
+                    .padding(.bottom, 80)
+                }
+
+                // Vertical height slider on right edge
+                HStack {
+                    Spacer()
+                    VStack(spacing: 4) {
+                        Text(String(format: "%.1fm", arManager.wallHeight))
+                            .font(.system(size: 11, design: .monospaced))
+                        Slider(value: $arManager.wallHeight, in: 0.5...5.0)
+                            .frame(width: 150)
+                            .rotationEffect(.degrees(-90))
+                            .frame(width: 30, height: 150)
+                        Image(systemName: "arrow.up.and.down")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(.vertical, 12)
+                    .padding(.horizontal, 8)
+                    .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16))
+                    .padding(.trailing, 8)
+                }
+                .frame(maxHeight: .infinity, alignment: .center)
             }
 
             // Fixture sidebar
@@ -380,7 +466,7 @@ struct ContentView: View {
                 stepLine(done: isStepDone(3))
                 stepDot(step: 4, active: arManager.state == .loading || arManager.state == .previewing)
                 stepLine(done: isStepDone(4))
-                stepDot(step: 5, active: [.roomPlaced, .fixtureLoading, .fixturePreviewing, .done].contains(arManager.state))
+                stepDot(step: 5, active: [.roomPlaced, .fixtureLoading, .fixturePreviewing, .wallStart, .wallEnd, .wallAdjust, .done].contains(arManager.state))
             }
 
             // Current instruction
@@ -417,6 +503,12 @@ struct ContentView: View {
             return "Loading fixture..."
         case .fixturePreviewing:
             return "Position fixture"
+        case .wallStart:
+            return "Place wall start"
+        case .wallEnd:
+            return "Place wall end"
+        case .wallAdjust:
+            return "Adjust wall"
         case .done:
             return "Complete"
         }
@@ -445,6 +537,12 @@ struct ContentView: View {
             return "Parsing fixture IFC..."
         case .fixturePreviewing:
             return "Move your device to position the fixture inside the room. Adjust with sliders, then tap Place Fixture."
+        case .wallStart:
+            return "Move your device to position the start point, then tap Place."
+        case .wallEnd:
+            return "Move to extend the wall. Tap Place to set the endpoint."
+        case .wallAdjust:
+            return "Use sliders to set height and width, then Confirm."
         case .done:
             return "All models placed. Tap Reset to start over."
         }
@@ -476,7 +574,7 @@ struct ContentView: View {
     }
 
     private func isStepDone(_ step: Int) -> Bool {
-        let laterStates: Set<ARState> = [.roomPlaced, .fixtureLoading, .fixturePreviewing, .done]
+        let laterStates: Set<ARState> = [.roomPlaced, .fixtureLoading, .fixturePreviewing, .wallStart, .wallEnd, .wallAdjust, .done]
         switch step {
         case 1:
             return arManager.alignmentPointCount >= 1 || arManager.state == .calibrating || arManager.state == .loading || arManager.state == .previewing || laterStates.contains(arManager.state)
@@ -503,6 +601,22 @@ struct ContentView: View {
                         fixtureButton(label: "Toilet", icon: "toilet", filename: "Objekt_WC")
                         fixtureButton(label: "Sink", icon: "drop", filename: "Objekt_Waschbecken")
                         fixtureButton(label: "Access. WC", icon: "figure.roll", filename: "Objekt_WC_Beh_")
+
+                        Button(action: {
+                            arManager.startWallBuilding()
+                            withAnimation(.spring(duration: 0.3)) { showFixturePicker = false }
+                        }) {
+                            VStack(spacing: 4) {
+                                Image(systemName: "square.split.bottomrightquarter")
+                                    .font(.title3)
+                                Text("Wall")
+                                    .font(.system(size: 9))
+                                    .fontWeight(.medium)
+                            }
+                            .frame(width: 64, height: 56)
+                            .background(.white.opacity(0.15), in: RoundedRectangle(cornerRadius: 10))
+                        }
+                        .foregroundStyle(.primary)
                     }
                     .padding(.vertical, 12)
                     .padding(.horizontal, 8)
