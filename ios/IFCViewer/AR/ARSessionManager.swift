@@ -35,6 +35,7 @@ class ARSessionManager: ObservableObject {
     @Published var selectedScreenPoint: CGPoint = .zero
     @Published var showingDetails: Bool = false
     @Published var exportFileURL: URL?
+    @Published var bcfIssues: [BCFIssue] = []
 
     func log(_ msg: String) {
         logger.info("\(msg)")
@@ -151,6 +152,7 @@ class ARSessionManager: ObservableObject {
                                 id: id,
                                 ifcType: meta.ifcType,
                                 name: meta.name,
+                                globalId: meta.globalId,
                                 properties: meta.properties,
                                 anchor: anchor
                             )
@@ -539,6 +541,44 @@ class ARSessionManager: ObservableObject {
         } catch {
             log("Export failed: \(error)")
         }
+    }
+
+    // MARK: - BCF Capture
+
+    struct CameraViewpoint {
+        let position: SIMD3<Float>
+        let direction: SIMD3<Float>
+        let up: SIMD3<Float>
+        let fieldOfView: Float // degrees
+    }
+
+    func captureSnapshot() async -> UIImage? {
+        guard let arView = arView else { return nil }
+        return await withCheckedContinuation { cont in
+            arView.snapshot(saveToHDR: false) { image in
+                cont.resume(returning: image)
+            }
+        }
+    }
+
+    func currentViewpoint() -> CameraViewpoint? {
+        guard let frame = arView?.session.currentFrame else { return nil }
+        let camera = frame.camera
+        let t = camera.transform
+
+        let position = SIMD3<Float>(t.columns.3.x, t.columns.3.y, t.columns.3.z)
+        // Camera looks along -Z in local space
+        let direction = -SIMD3<Float>(t.columns.2.x, t.columns.2.y, t.columns.2.z)
+        // Up is +Y in local space
+        let up = SIMD3<Float>(t.columns.1.x, t.columns.1.y, t.columns.1.z)
+
+        // Vertical FOV from intrinsics
+        let intrinsics = camera.intrinsics
+        let focalLength = intrinsics[1][1]
+        let imageHeight = Float(camera.imageResolution.height)
+        let fovDegrees = 2 * atan(imageHeight / (2 * focalLength)) * 180 / .pi
+
+        return CameraViewpoint(position: position, direction: direction, up: up, fieldOfView: fovDegrees)
     }
 
     // MARK: - Grid Rotation

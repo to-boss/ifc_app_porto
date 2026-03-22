@@ -11,6 +11,17 @@ struct ShareSheet: UIViewControllerRepresentable {
 struct ContentView: View {
     @StateObject private var arManager = ARSessionManager()
     @State private var showDebugLog = false
+    @State private var showBCFSheet = false
+    @State private var showBCFList = false
+    @State private var bcfTitle = ""
+    @State private var bcfDescription = ""
+    @State private var bcfPriority = "Normal"
+    @State private var bcfStatus = "Open"
+    @State private var bcfAssignee = ""
+    @State private var capturedSnapshot: UIImage?
+    @State private var capturedViewpoint: ARSessionManager.CameraViewpoint?
+    @State private var bcfElementGlobalId: String?
+    @State private var bcfElementIfcType: String?
 
     var body: some View {
         ZStack {
@@ -60,99 +71,7 @@ struct ContentView: View {
                         .padding(.horizontal, 20)
                 }
 
-                // Bottom toolbar
-                HStack(spacing: 12) {
-                    if arManager.state == .calibrating {
-                        Button(action: { arManager.confirmAlignment() }) {
-                            Label("Confirm", systemImage: "checkmark.circle.fill")
-                                .font(.subheadline)
-                                .fontWeight(.semibold)
-                                .padding(.horizontal, 20)
-                                .padding(.vertical, 12)
-                                .background(.green.opacity(0.85), in: Capsule())
-                                .foregroundStyle(.white)
-                        }
-                    }
-
-                    if arManager.state == .previewing {
-                        Button(action: { arManager.placeRoom() }) {
-                            Label("Place Room", systemImage: "checkmark.circle.fill")
-                                .font(.subheadline)
-                                .fontWeight(.semibold)
-                                .padding(.horizontal, 24)
-                                .padding(.vertical, 14)
-                                .background(.green.opacity(0.85), in: Capsule())
-                                .foregroundStyle(.white)
-                        }
-                    }
-
-                    if arManager.state == .fixturePreviewing {
-                        Button(action: { arManager.placeFixture() }) {
-                            Label("Place Fixture", systemImage: "checkmark.circle.fill")
-                                .font(.subheadline)
-                                .fontWeight(.semibold)
-                                .padding(.horizontal, 24)
-                                .padding(.vertical, 14)
-                                .background(.green.opacity(0.85), in: Capsule())
-                                .foregroundStyle(.white)
-                        }
-                    }
-
-                    if arManager.state == .roomPlaced || arManager.state == .done {
-                        Button(action: { arManager.exportMergedIFC() }) {
-                            Label("Export", systemImage: "square.and.arrow.up")
-                                .font(.subheadline)
-                                .fontWeight(.semibold)
-                                .padding(.horizontal, 20)
-                                .padding(.vertical, 12)
-                                .background(.orange.opacity(0.85), in: Capsule())
-                                .foregroundStyle(.white)
-                        }
-                    }
-
-                    if arManager.state == .roomPlaced {
-                        Button(action: { arManager.finishSession() }) {
-                            Label("Done", systemImage: "checkmark.seal.fill")
-                                .font(.subheadline)
-                                .fontWeight(.semibold)
-                                .padding(.horizontal, 20)
-                                .padding(.vertical, 12)
-                                .background(.blue.opacity(0.85), in: Capsule())
-                                .foregroundStyle(.white)
-                        }
-                    }
-
-                    if arManager.state == .loading || arManager.state == .fixtureLoading {
-                        ProgressView()
-                            .tint(.white)
-                    }
-
-                    if [.calibrating, .previewing, .fixturePreviewing, .roomPlaced, .done].contains(arManager.state) {
-                        Button(action: { arManager.reset() }) {
-                            Label("Reset", systemImage: "arrow.counterclockwise")
-                                .font(.subheadline)
-                                .fontWeight(.medium)
-                                .padding(.horizontal, 20)
-                                .padding(.vertical, 10)
-                                .background(.ultraThinMaterial, in: Capsule())
-                        }
-                    }
-                }
-                .padding(.bottom, 20)
-
-                // Debug toggle + log overlay
-                HStack {
-                    Spacer()
-                    Button(action: { showDebugLog.toggle() }) {
-                        Image(systemName: "ladybug")
-                            .font(.system(size: 14))
-                            .padding(8)
-                            .background(.ultraThinMaterial, in: Circle())
-                            .foregroundStyle(showDebugLog ? .green : .secondary)
-                    }
-                    .padding(.trailing, 12)
-                }
-
+                // Debug log (above toolbar)
                 if showDebugLog && !arManager.debugLog.isEmpty {
                     VStack(alignment: .leading, spacing: 2) {
                         ForEach(Array(arManager.debugLog.enumerated()), id: \.offset) { _, line in
@@ -165,8 +84,104 @@ struct ContentView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .background(.black.opacity(0.7))
                     .padding(.horizontal, 8)
-                    .padding(.bottom, 60)
                 }
+
+                // Bottom toolbar
+                HStack {
+                    // Primary action (left)
+                    if arManager.state == .calibrating {
+                        Button(action: { arManager.confirmAlignment() }) {
+                            Label("Confirm", systemImage: "checkmark.circle.fill")
+                                .font(.subheadline)
+                                .fontWeight(.semibold)
+                                .padding(.horizontal, 20)
+                                .padding(.vertical, 12)
+                                .background(.green.opacity(0.85), in: Capsule())
+                                .foregroundStyle(.white)
+                        }
+                    } else if arManager.state == .previewing {
+                        Button(action: { arManager.placeRoom() }) {
+                            Label("Place Room", systemImage: "checkmark.circle.fill")
+                                .font(.subheadline)
+                                .fontWeight(.semibold)
+                                .padding(.horizontal, 20)
+                                .padding(.vertical, 12)
+                                .background(.green.opacity(0.85), in: Capsule())
+                                .foregroundStyle(.white)
+                        }
+                    } else if arManager.state == .fixturePreviewing {
+                        Button(action: { arManager.placeFixture() }) {
+                            Label("Place Fixture", systemImage: "checkmark.circle.fill")
+                                .font(.subheadline)
+                                .fontWeight(.semibold)
+                                .padding(.horizontal, 20)
+                                .padding(.vertical, 12)
+                                .background(.green.opacity(0.85), in: Capsule())
+                                .foregroundStyle(.white)
+                        }
+                    } else if arManager.state == .roomPlaced {
+                        Button(action: { arManager.finishSession() }) {
+                            Label("Done", systemImage: "checkmark.seal.fill")
+                                .font(.subheadline)
+                                .fontWeight(.semibold)
+                                .padding(.horizontal, 20)
+                                .padding(.vertical, 12)
+                                .background(.blue.opacity(0.85), in: Capsule())
+                                .foregroundStyle(.white)
+                        }
+                    } else if arManager.state == .loading || arManager.state == .fixtureLoading {
+                        ProgressView()
+                            .tint(.white)
+                    }
+
+                    Spacer()
+
+                    // Secondary actions (right)
+                    HStack(spacing: 10) {
+                        if [.calibrating, .previewing, .fixturePreviewing, .roomPlaced, .done].contains(arManager.state) {
+                            Button(action: { arManager.reset() }) {
+                                Image(systemName: "arrow.counterclockwise")
+                                    .font(.title3)
+                                    .padding(10)
+                                    .background(.ultraThinMaterial, in: Circle())
+                            }
+                        }
+
+                        Button(action: { showDebugLog.toggle() }) {
+                            Image(systemName: "ladybug")
+                                .font(.title3)
+                                .padding(10)
+                                .background(.ultraThinMaterial, in: Circle())
+                                .foregroundStyle(showDebugLog ? .green : .secondary)
+                        }
+
+                        if arManager.state == .roomPlaced || arManager.state == .done {
+                            Menu {
+                                Button(action: { arManager.exportMergedIFC() }) {
+                                    Label("Export IFC", systemImage: "square.and.arrow.up")
+                                }
+                                Button(action: { startBCFReport(element: nil) }) {
+                                    Label("Report Issue", systemImage: "exclamationmark.bubble")
+                                }
+                                if !arManager.bcfIssues.isEmpty {
+                                    Button(action: { showBCFList = true }) {
+                                        Label("BCF Issues (\(arManager.bcfIssues.count))", systemImage: "doc.text")
+                                    }
+                                    Button(action: { exportAllBCF() }) {
+                                        Label("Export All", systemImage: "arrow.down.doc")
+                                    }
+                                }
+                            } label: {
+                                Image(systemName: "ellipsis.circle")
+                                    .font(.title2)
+                                    .padding(10)
+                                    .background(.ultraThinMaterial, in: Circle())
+                            }
+                        }
+                    }
+                }
+                .padding(.horizontal, 16)
+                .padding(.bottom, 20)
             }
 
             // Floating bubble action menu
@@ -191,6 +206,162 @@ struct ContentView: View {
         )) {
             if let url = arManager.exportFileURL {
                 ShareSheet(items: [url])
+            }
+        }
+        .sheet(isPresented: $showBCFSheet) {
+            bcfFormSheet
+        }
+        .sheet(isPresented: $showBCFList) {
+            bcfListSheet
+        }
+    }
+
+    // MARK: - BCF
+
+    private func startBCFReport(element: ElementInfo?) {
+        bcfElementGlobalId = element?.globalId
+        bcfElementIfcType = element?.ifcType
+        bcfTitle = ""
+        bcfDescription = ""
+        bcfPriority = "Normal"
+        bcfStatus = "Open"
+        bcfAssignee = ""
+
+        // Capture snapshot + viewpoint before showing the sheet
+        capturedViewpoint = arManager.currentViewpoint()
+        Task {
+            capturedSnapshot = await arManager.captureSnapshot()
+            showBCFSheet = true
+        }
+    }
+
+    private var bcfFormSheet: some View {
+        NavigationView {
+            Form {
+                Section("Issue Details") {
+                    TextField("Title", text: $bcfTitle)
+                    TextField("Description", text: $bcfDescription, axis: .vertical)
+                        .lineLimit(3...6)
+                }
+                Section("Classification") {
+                    Picker("Priority", selection: $bcfPriority) {
+                        ForEach(["Low", "Normal", "High", "Critical"], id: \.self) { Text($0) }
+                    }
+                    .pickerStyle(.menu)
+                    Picker("Status", selection: $bcfStatus) {
+                        ForEach(["Open", "In Progress", "Closed"], id: \.self) { Text($0) }
+                    }
+                    .pickerStyle(.menu)
+                    TextField("Assignee", text: $bcfAssignee)
+                }
+                if bcfElementGlobalId != nil {
+                    Section("Linked Element") {
+                        Label(bcfElementIfcType ?? "Element", systemImage: "cube")
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+            .navigationTitle("Create BCF Issue")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { showBCFSheet = false }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Add Issue") { addBCFIssue() }
+                        .disabled(bcfTitle.isEmpty)
+                }
+            }
+        }
+    }
+
+    private func addBCFIssue() {
+        guard let snapshot = capturedSnapshot,
+              let viewpoint = capturedViewpoint else {
+            arManager.log("BCF: missing snapshot or viewpoint")
+            return
+        }
+
+        let issue = BCFIssue(
+            title: bcfTitle,
+            description: bcfDescription,
+            priority: bcfPriority,
+            status: bcfStatus,
+            assignee: bcfAssignee,
+            author: UIDevice.current.name,
+            cameraPosition: viewpoint.position,
+            cameraDirection: viewpoint.direction,
+            cameraUp: viewpoint.up,
+            fieldOfView: viewpoint.fieldOfView,
+            selectedGlobalId: bcfElementGlobalId,
+            selectedIfcType: bcfElementIfcType,
+            snapshot: snapshot
+        )
+
+        arManager.bcfIssues.append(issue)
+        arManager.log("BCF issue added: \(issue.title) (\(arManager.bcfIssues.count) total)")
+        showBCFSheet = false
+    }
+
+    private func exportAllBCF() {
+        do {
+            let url = try BCFExporter.export(issues: arManager.bcfIssues)
+            arManager.log("BCF exported \(arManager.bcfIssues.count) issues: \(url.lastPathComponent)")
+            showBCFList = false
+            arManager.exportFileURL = url
+        } catch {
+            arManager.log("BCF export failed: \(error)")
+        }
+    }
+
+    private var bcfListSheet: some View {
+        NavigationView {
+            List {
+                ForEach(Array(arManager.bcfIssues.enumerated()), id: \.offset) { index, issue in
+                    HStack(spacing: 12) {
+                        Image(uiImage: issue.snapshot)
+                            .resizable()
+                            .aspectRatio(contentMode: .fill)
+                            .frame(width: 56, height: 56)
+                            .clipShape(RoundedRectangle(cornerRadius: 8))
+
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(issue.title)
+                                .font(.subheadline)
+                                .fontWeight(.semibold)
+                                .lineLimit(1)
+                            HStack(spacing: 6) {
+                                Text(issue.priority)
+                                    .font(.caption2)
+                                    .padding(.horizontal, 6)
+                                    .padding(.vertical, 2)
+                                    .background(.orange.opacity(0.2), in: Capsule())
+                                Text(issue.status)
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                                if issue.selectedGlobalId != nil {
+                                    Image(systemName: "cube")
+                                        .font(.caption2)
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                        }
+                    }
+                }
+                .onDelete { indexSet in
+                    arManager.bcfIssues.remove(atOffsets: indexSet)
+                }
+            }
+            .navigationTitle("BCF Issues (\(arManager.bcfIssues.count))")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Close") { showBCFList = false }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Export All") { exportAllBCF() }
+                        .disabled(arManager.bcfIssues.isEmpty)
+                }
             }
         }
     }
@@ -358,7 +529,7 @@ struct ContentView: View {
 
     private func elementBubble(_ element: ElementInfo) -> some View {
         GeometryReader { geo in
-            let bubbleWidth: CGFloat = 220
+            let bubbleWidth: CGFloat = 280
             let bubbleHeight: CGFloat = 120
             let tapPt = arManager.selectedScreenPoint
             // Position bubble above the tap point, clamped to screen
@@ -405,6 +576,17 @@ struct ContentView: View {
                         .background(.red.opacity(0.2), in: RoundedRectangle(cornerRadius: 8))
                     }
                     .foregroundStyle(.red)
+
+                    Button(action: { startBCFReport(element: element) }) {
+                        VStack(spacing: 2) {
+                            Image(systemName: "exclamationmark.bubble")
+                                .font(.body)
+                            Text("Report")
+                                .font(.system(size: 9))
+                        }
+                        .frame(width: 56, height: 44)
+                        .background(.yellow.opacity(0.2), in: RoundedRectangle(cornerRadius: 8))
+                    }
                 }
             }
             .padding(12)

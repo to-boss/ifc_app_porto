@@ -26,6 +26,7 @@ struct ValidatedElement: Sendable {
     let id: UInt64
     let ifcType: String
     let name: String?
+    let globalId: String?
     let positions: [Float]
     let normals: [Float]
     let indices: [UInt32]
@@ -38,6 +39,7 @@ struct ElementInfo {
     let id: UInt64
     let ifcType: String
     let name: String?
+    let globalId: String?
     let properties: [IfcProperty]
     let anchor: AnchorEntity
 }
@@ -108,6 +110,7 @@ enum IFCLoader {
                 id: element.id,
                 ifcType: element.ifcType,
                 name: element.name,
+                globalId: element.globalId,
                 positions: geometry.positions,
                 normals: geometry.normals,
                 indices: geometry.indices,
