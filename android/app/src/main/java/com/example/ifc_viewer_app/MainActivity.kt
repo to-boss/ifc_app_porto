@@ -1,11 +1,14 @@
 package com.example.ifc_viewer_app
 
 import android.os.Bundle
-import android.view.MotionEvent
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
 import com.google.ar.core.Anchor
 import com.google.ar.core.Config
+import com.google.ar.core.Frame
+import com.google.ar.core.Plane
+import com.google.ar.core.Session
+import com.google.ar.core.TrackingState
 import dev.romainguy.kotlin.math.Float3
 import dev.romainguy.kotlin.math.Float4
 import io.github.sceneview.ar.ARSceneView
@@ -17,6 +20,7 @@ class MainActivity : AppCompatActivity() {
 
     private lateinit var sceneView: ARSceneView
     private lateinit var instructionsText: TextView
+    private var modelPlaced = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -25,10 +29,8 @@ class MainActivity : AppCompatActivity() {
         instructionsText = findViewById(R.id.instructions_text)
         sceneView = findViewById(R.id.scene_view)
 
-        // Show detected planes as a grid overlay
         sceneView.planeRenderer.isEnabled = true
 
-        // Configure the ARCore session
         sceneView.configureSession { session, config ->
             config.depthMode = when {
                 session.isDepthModeSupported(Config.DepthMode.AUTOMATIC) ->
@@ -39,16 +41,20 @@ class MainActivity : AppCompatActivity() {
             config.lightEstimationMode = Config.LightEstimationMode.ENVIRONMENTAL_HDR
         }
 
-        // Tap on a detected plane to place the 3D model
-        sceneView.setOnTouchListener { _, event ->
-            if (event.action == MotionEvent.ACTION_UP) {
-                val hitResult = sceneView.hitTestAR(event.x, event.y)
-                if (hitResult != null) {
-                    placeModel(hitResult.createAnchor())
+        // Automatically place the model on the first detected horizontal plane
+        sceneView.onSessionUpdated = { session: Session, _: Frame ->
+            if (!modelPlaced) {
+                val plane = session.getAllTrackables(Plane::class.java)
+                    .firstOrNull { p ->
+                        p.trackingState == TrackingState.TRACKING &&
+                        p.type == Plane.Type.HORIZONTAL_UPWARD_FACING
+                    }
+                if (plane != null) {
+                    modelPlaced = true
+                    val anchor = plane.createAnchor(plane.centerPose)
+                    runOnUiThread { placeModel(anchor) }
                 }
             }
-            // Return false so SceneView's own gesture handling still works
-            false
         }
     }
 
