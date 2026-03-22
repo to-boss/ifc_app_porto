@@ -11,9 +11,17 @@ pub struct IfcElement {
     pub ifc_type: String,
     pub name: Option<String>,
     pub global_id: Option<String>,
+    pub description: Option<String>,
+    pub object_type: Option<String>,
+    pub tag: Option<String>,
+    pub predefined_type: Option<String>,
     pub color: ElementColor,
     pub geometry: Option<MeshData>,
     pub properties: Vec<IfcProperty>,
+    pub quantities: Vec<IfcQuantity>,
+    pub material: Option<IfcMaterialInfo>,
+    pub type_info: Option<IfcTypeInfo>,
+    pub classification: Option<IfcClassificationInfo>,
 }
 
 /// Internal element type used during processing.
@@ -23,9 +31,17 @@ pub struct InternalElement {
     pub ifc_type: String,
     pub name: Option<String>,
     pub global_id: Option<String>,
+    pub description: Option<String>,
+    pub object_type: Option<String>,
+    pub tag: Option<String>,
+    pub predefined_type: Option<String>,
     pub geometry: Option<ifc_lite_geometry::Mesh>,
     pub color: ElementColor,
     pub properties: Vec<IfcProperty>,
+    pub quantities: Vec<IfcQuantity>,
+    pub material: Option<IfcMaterialInfo>,
+    pub type_info: Option<IfcTypeInfo>,
+    pub classification: Option<IfcClassificationInfo>,
 }
 
 impl InternalElement {
@@ -35,6 +51,10 @@ impl InternalElement {
             ifc_type: self.ifc_type.clone(),
             name: self.name.clone(),
             global_id: self.global_id.clone(),
+            description: self.description.clone(),
+            object_type: self.object_type.clone(),
+            tag: self.tag.clone(),
+            predefined_type: self.predefined_type.clone(),
             color: self.color,
             geometry: self.geometry.as_ref().map(|m| MeshData {
                 positions: m.positions.clone(),
@@ -42,6 +62,10 @@ impl InternalElement {
                 indices: m.indices.clone(),
             }),
             properties: self.properties.clone(),
+            quantities: self.quantities.clone(),
+            material: self.material.clone(),
+            type_info: self.type_info.clone(),
+            classification: self.classification.clone(),
         }
     }
 }
@@ -80,6 +104,47 @@ pub struct IfcProperty {
     pub name: String,
     pub value: String,
     pub property_set: Option<String>,
+}
+
+/// A quantity value from an IFCELEMENTQUANTITY.
+#[derive(Clone)]
+pub struct IfcQuantity {
+    pub name: String,
+    pub value: f64,
+    /// "Length", "Area", "Volume", "Count", "Weight"
+    pub quantity_type: String,
+    pub quantity_set: Option<String>,
+}
+
+/// Material information for an element.
+#[derive(Clone)]
+pub struct IfcMaterialInfo {
+    pub name: String,
+    pub category: Option<String>,
+    pub layers: Vec<IfcMaterialLayer>,
+}
+
+/// A single layer in a material layer set.
+#[derive(Clone)]
+pub struct IfcMaterialLayer {
+    pub material_name: String,
+    pub thickness: Option<f64>,
+}
+
+/// Type product information from IFCRELDEFINESBYTYPE.
+#[derive(Clone)]
+pub struct IfcTypeInfo {
+    pub ifc_type: String,
+    pub name: Option<String>,
+    pub predefined_type: Option<String>,
+}
+
+/// Classification reference from IFCRELASSOCIATESCLASSIFICATION.
+#[derive(Clone)]
+pub struct IfcClassificationInfo {
+    pub name: String,
+    pub system_name: String,
+    pub system_source: Option<String>,
 }
 
 /// The spatial hierarchy of the IFC model.

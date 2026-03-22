@@ -28,9 +28,17 @@ dictionary IfcElement {
     string ifc_type;
     string? name;
     string? global_id;
+    string? description;
+    string? object_type;
+    string? tag;
+    string? predefined_type;
     ElementColor color;
     MeshData? geometry;
     sequence<IfcProperty> properties;
+    sequence<IfcQuantity> quantities;
+    IfcMaterialInfo? material;
+    IfcTypeInfo? type_info;
+    IfcClassificationInfo? classification;
 };
 
 dictionary MeshData {
@@ -50,6 +58,36 @@ dictionary IfcProperty {
     string name;
     string value;
     string? property_set;
+};
+
+dictionary IfcQuantity {
+    string name;
+    double value;
+    string quantity_type;
+    string? quantity_set;
+};
+
+dictionary IfcMaterialInfo {
+    string name;
+    string? category;
+    sequence<IfcMaterialLayer> layers;
+};
+
+dictionary IfcMaterialLayer {
+    string material_name;
+    double? thickness;
+};
+
+dictionary IfcTypeInfo {
+    string ifc_type;
+    string? name;
+    string? predefined_type;
+};
+
+dictionary IfcClassificationInfo {
+    string name;
+    string system_name;
+    string? system_source;
 };
 
 dictionary SpatialTree {

@@ -9,7 +9,10 @@ pub mod properties;
 pub mod types;
 
 use error::IfcArError;
-use types::{ElementColor, IfcElement, IfcModel, IfcProperty, MeshData, ModelBounds, SpatialNode, SpatialTree};
+use types::{
+    ElementColor, IfcClassificationInfo, IfcElement, IfcMaterialInfo, IfcMaterialLayer, IfcModel,
+    IfcProperty, IfcQuantity, IfcTypeInfo, MeshData, ModelBounds, SpatialNode, SpatialTree,
+};
 
 // UniFFI scaffolding
 uniffi::include_scaffolding!("ifc_ar_core");

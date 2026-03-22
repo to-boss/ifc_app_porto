@@ -18,8 +18,12 @@ pub fn process_geometry(
     // Build style index for color lookup
     let style_map = build_style_index(parsed, &mut decoder);
 
-    // Extract properties for all elements
+    // Extract properties and metadata for all elements
     let property_map = crate::properties::extract_properties(parsed, &mut decoder);
+    let quantity_map = crate::properties::extract_quantities(parsed, &mut decoder);
+    let material_map = crate::properties::extract_materials(parsed, &mut decoder);
+    let type_map = crate::properties::extract_types(parsed, &mut decoder);
+    let classification_map = crate::properties::extract_classifications(parsed, &mut decoder);
 
     // Create geometry router with automatic unit detection
     let router = GeometryRouter::with_units(&parsed.content, &mut decoder);
@@ -48,23 +52,48 @@ pub fn process_geometry(
         // Resolve color: style map → default by type
         let color = resolve_color(scanned.id, &scanned.ifc_type, &style_map);
 
-        // Extract name and global ID
+        // Extract element attributes
         let name = entity.get_string(2).map(|s| s.to_string());
         let global_id = entity.get_string(0).map(|s| s.to_string());
+        let description = entity.get_string(3).map(|s| s.to_string());
+        let object_type = entity.get_string(4).map(|s| s.to_string());
+        let tag = entity.get_string(7).map(|s| s.to_string());
+        let predefined_type = match entity.get(8) {
+            Some(ifc_lite_core::AttributeValue::Enum(e)) => Some(e.clone()),
+            _ => entity.get(9).and_then(|a| match a {
+                ifc_lite_core::AttributeValue::Enum(e) => Some(e.clone()),
+                _ => None,
+            }),
+        };
 
         let properties = property_map
             .get(&scanned.id)
             .cloned()
             .unwrap_or_default();
+        let quantities = quantity_map
+            .get(&scanned.id)
+            .cloned()
+            .unwrap_or_default();
+        let material = material_map.get(&scanned.id).cloned();
+        let type_info = type_map.get(&scanned.id).cloned();
+        let classification = classification_map.get(&scanned.id).cloned();
 
         elements.push(InternalElement {
             id: scanned.id as u64,
             ifc_type: scanned.ifc_type.clone(),
             name,
             global_id,
+            description,
+            object_type,
+            tag,
+            predefined_type,
             geometry: mesh,
             color,
             properties,
+            quantities,
+            material,
+            type_info,
+            classification,
         });
     }
 
