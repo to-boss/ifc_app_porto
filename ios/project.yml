@@ -1,0 +1,34 @@
+name: IFCViewer
+options:
+  bundleIdPrefix: com.ifcar
+  deploymentTarget:
+    iOS: "18.0"
+  xcodeVersion: "15.0"
+  generateEmptyDirectories: true
+
+targets:
+  IFCViewer:
+    type: application
+    platform: iOS
+    sources:
+      - IFCViewer
+    settings:
+      base:
+        INFOPLIST_FILE: IFCViewer/Info.plist
+        PRODUCT_BUNDLE_IDENTIFIER: com.ifcar.viewer
+        SWIFT_VERSION: "5.9"
+        TARGETED_DEVICE_FAMILY: "1,2"
+        SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD: "NO"
+        DEVELOPMENT_TEAM: RTM84NZJZ2
+        CODE_SIGN_STYLE: Automatic
+    info:
+      path: IFCViewer/Info.plist
+      properties:
+        NSCameraUsageDescription: "IFC Viewer needs camera access for augmented reality."
+        UILaunchScreen: {}
+        UIRequiredDeviceCapabilities:
+          - arkit
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
