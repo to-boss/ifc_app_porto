@@ -7,7 +7,6 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		34993DB5E1825B7EC5AD6564 /* WallPlaneEntity.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0659692294503D4FF8F78BF5 /* WallPlaneEntity.swift */; };
 		39CF3604C65F0300BD816AC3 /* ARContainerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 698D89F0D3FEAE9B22AA957B /* ARContainerView.swift */; };
 		4A2CED66A34A775B3B1450DE /* IFCViewerApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2628624924339AD6B80B95B /* IFCViewerApp.swift */; };
 		70244BFB856366DC6B44248F /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7F16132FBF3CF73A59281801 /* ContentView.swift */; };
@@ -16,7 +15,6 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
-		0659692294503D4FF8F78BF5 /* WallPlaneEntity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WallPlaneEntity.swift; sourceTree = "<group>"; };
 		2C3DBEB144063A48D550A7A5 /* IFCViewer.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = IFCViewer.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		698D89F0D3FEAE9B22AA957B /* ARContainerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ARContainerView.swift; sourceTree = "<group>"; };
 		7F16132FBF3CF73A59281801 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
@@ -33,7 +31,6 @@
 				698D89F0D3FEAE9B22AA957B /* ARContainerView.swift */,
 				FECB64B299F294F02C45073E /* ARSessionManager.swift */,
 				B81190815F9F9F55951EC9F6 /* FloorGridEntity.swift */,
-				0659692294503D4FF8F78BF5 /* WallPlaneEntity.swift */,
 			);
 			path = AR;
 			sourceTree = "<group>";
@@ -129,7 +126,6 @@
 				70244BFB856366DC6B44248F /* ContentView.swift in Sources */,
 				BA7DD3F456050B67C42D3DE4 /* FloorGridEntity.swift in Sources */,
 				4A2CED66A34A775B3B1450DE /* IFCViewerApp.swift in Sources */,
-				34993DB5E1825B7EC5AD6564 /* WallPlaneEntity.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

@@ -5,7 +5,7 @@ import Combine
 
 enum ARState {
     case coaching
-    case scanning
+    case aligning
     case calibrating
     case ready
     case contentPlaced
@@ -15,15 +15,18 @@ enum ARState {
 class ARSessionManager: ObservableObject {
     @Published var state: ARState = .coaching
     @Published var gridRotation: Float = 0
+    @Published var alignmentPointCount: Int = 0
 
     var statusText: String {
         switch state {
         case .coaching:
             return "Move your device to scan the floor"
-        case .scanning:
-            return "Scanning walls..."
+        case .aligning:
+            return alignmentPointCount == 0
+                ? "Tap 2 points along a wall edge"
+                : "Tap a second point along the wall"
         case .calibrating:
-            return "Twist to adjust grid, then confirm"
+            return "Twist to fine-tune, then confirm"
         case .ready:
             return "Tap to place column"
         case .contentPlaced:
@@ -35,87 +38,42 @@ class ARSessionManager: ObservableObject {
 
     private var floorAnchor: AnchorEntity?
     private var gridEntity: FloorGridEntity?
-    private var floorHeight: Float?
 
-    private var wallEntities: [UUID: (AnchorEntity, WallPlaneEntity)] = [:]
-    private var wallAnchors: [UUID: ARPlaneAnchor] = [:]
+    // Alignment
+    private var alignmentPoints: [SIMD3<Float>] = []
+    private var alignmentMarkers: [AnchorEntity] = []
+    private var alignmentLine: AnchorEntity?
+
     private var columns: [ModelEntity] = []
 
     let gridSpacing: Float = 0.5
-    private let minWallExtent: Float = 1.0 // minimum 1m to count as a wall
 
     // MARK: - Coaching
 
     func coachingDidFinish() {
         if state == .coaching {
-            state = .scanning
+            state = .aligning
         }
     }
 
     // MARK: - Plane Detection
 
     func handlePlaneAnchorAdded(_ anchor: ARPlaneAnchor) {
-        if anchor.alignment == .horizontal {
-            handleFloorDetected(anchor)
-        } else if anchor.alignment == .vertical {
-            handleWallDetected(anchor)
-        }
+        guard anchor.alignment == .horizontal else { return }
+        handleFloorDetected(anchor)
     }
 
     func handlePlaneAnchorUpdated(_ anchor: ARPlaneAnchor) {
-        if anchor.alignment == .horizontal {
-            // Track lowest floor height
-            let y = anchor.transform.columns.3.y
-            if let current = floorHeight, y < current - 0.03 {
-                floorHeight = y
-                updateFloorAnchorHeight(y)
-            }
-        } else if anchor.alignment == .vertical {
-            // Update wall entity extent
-            if let (_, wallEntity) = wallEntities[anchor.identifier] {
-                wallEntity.updateExtent(
-                    width: anchor.planeExtent.width,
-                    height: anchor.planeExtent.height
-                )
-            }
-            // Update stored anchor and recalculate alignment
-            if wallAnchors[anchor.identifier] != nil {
-                wallAnchors[anchor.identifier] = anchor
-                if state == .calibrating {
-                    recalculateWallAlignment()
-                }
-            }
-        }
+        // Floor height will be set precisely from alignment taps
     }
 
-    func handlePlaneAnchorRemoved(_ anchor: ARPlaneAnchor) {
-        if let (anchorEntity, _) = wallEntities.removeValue(forKey: anchor.identifier) {
-            arView?.scene.removeAnchor(anchorEntity)
-        }
-        wallAnchors.removeValue(forKey: anchor.identifier)
-    }
-
-    // MARK: - Floor (lowest plane, world anchor)
+    // MARK: - Floor
 
     private func handleFloorDetected(_ anchor: ARPlaneAnchor) {
+        guard floorAnchor == nil else { return }
+
         let y = anchor.transform.columns.3.y
-
-        if let currentHeight = floorHeight {
-            // Only update if this plane is significantly lower (likely the real floor)
-            if y < currentHeight - 0.03 {
-                floorHeight = y
-                updateFloorAnchorHeight(y)
-            }
-            return
-        }
-
-        // First floor detection — create grid at world position (not tracking the anchor)
-        floorHeight = y
-        let position = SIMD3<Float>(
-            anchor.transform.columns.3.x,
-            y,
-            anchor.transform.columns.3.z
-        )
+        let position = SIMD3<Float>(0, y, 0)
 
         let anchorEntity = AnchorEntity(world: position)
         let grid = FloorGridEntity(spacing: gridSpacing)
@@ -125,77 +83,132 @@ class ARSessionManager: ObservableObject {
         floorAnchor = anchorEntity
         gridEntity = grid
 
-        if state == .coaching || state == .scanning {
-            state = .scanning
+        if state == .coaching || state == .aligning {
+            state = .aligning
         }
     }
 
-    private func updateFloorAnchorHeight(_ newY: Float) {
-        guard let anchor = floorAnchor else { return }
-        var pos = anchor.position
-        pos.y = newY
-        anchor.position = pos
+    // MARK: - Tap Handling
+
+    func handleTap(at point: CGPoint) {
+        guard let arView = arView else { return }
+
+        if state == .aligning {
+            handleAlignmentTap(at: point)
+        } else if state == .ready || state == .contentPlaced {
+            handlePlacementTap(at: point)
+        }
     }
 
-    // MARK: - Wall Detection & Grid Alignment
+    // MARK: - 2-Point Wall Alignment
 
-    private func handleWallDetected(_ anchor: ARPlaneAnchor) {
-        // Filter out small/noisy planes
-        guard anchor.planeExtent.width >= minWallExtent,
-              anchor.planeExtent.height >= minWallExtent else {
-            return
-        }
+    private func handleAlignmentTap(at point: CGPoint) {
+        guard let arView = arView else { return }
 
-        // Visualize the wall
-        let anchorEntity = AnchorEntity(anchor: anchor)
-        let wallEntity = WallPlaneEntity(
-            width: anchor.planeExtent.width,
-            height: anchor.planeExtent.height
+        let results = arView.raycast(from: point, allowing: .existingPlaneGeometry, alignment: .horizontal)
+        guard let result = results.first else { return }
+
+        let worldPos = SIMD3<Float>(
+            result.worldTransform.columns.3.x,
+            result.worldTransform.columns.3.y,
+            result.worldTransform.columns.3.z
         )
-        anchorEntity.addChild(wallEntity)
-        arView?.scene.addAnchor(anchorEntity)
-        wallEntities[anchor.identifier] = (anchorEntity, wallEntity)
-        wallAnchors[anchor.identifier] = anchor
 
-        // Recalculate alignment from all walls
-        if floorAnchor != nil {
-            recalculateWallAlignment()
-            if state == .scanning {
-                state = .calibrating
-            }
+        alignmentPoints.append(worldPos)
+        placeAlignmentMarker(at: worldPos)
+        alignmentPointCount = alignmentPoints.count
+
+        if alignmentPoints.count == 2 {
+            let p1 = alignmentPoints[0]
+            let p2 = alignmentPoints[1]
+
+            // Draw line between points
+            drawAlignmentLine(from: p1, to: p2)
+
+            // Compute grid rotation from the line direction
+            let dx = p2.x - p1.x
+            let dz = p2.z - p1.z
+            gridRotation = atan2(dz, dx)
+            updateGridRotation()
+
+            // Set floor height from the average of the two tapped points
+            let floorY = (p1.y + p2.y) / 2
+            floorAnchor?.position.y = floorY
+
+            state = .calibrating
         }
     }
 
-    /// Average all wall normals and snap to nearest 90° for grid alignment.
-    private func recalculateWallAlignment() {
-        guard !wallAnchors.isEmpty else { return }
+    private func placeAlignmentMarker(at position: SIMD3<Float>) {
+        guard let arView = arView else { return }
 
-        // Collect all wall normals projected onto XZ plane
-        var angles: [Float] = []
-        for anchor in wallAnchors.values {
-            let normalX = anchor.transform.columns.2.x
-            let normalZ = anchor.transform.columns.2.z
-            let angle = atan2(normalX, normalZ)
-            // Normalize to [0, π/2) range — walls are typically orthogonal
-            let normalized = angle.truncatingRemainder(dividingBy: .pi / 2)
-            angles.append(normalized)
+        var material = UnlitMaterial()
+        material.color = .init(tint: .cyan)
+
+        // Floor dot — flat disc
+        let disc = MeshResource.generateCylinder(height: 0.005, radius: 0.04)
+        let discEntity = ModelEntity(mesh: disc, materials: [material])
+
+        // Vertical pole — tall thin cylinder shooting up so the point is visible from any angle
+        let pole = MeshResource.generateCylinder(height: 1.0, radius: 0.003)
+        let poleEntity = ModelEntity(mesh: pole, materials: [material])
+        poleEntity.position.y = 0.5 // center of 1m pole
+
+        // Small sphere on top of the pole
+        let sphere = MeshResource.generateSphere(radius: 0.015)
+        let sphereEntity = ModelEntity(mesh: sphere, materials: [material])
+        sphereEntity.position.y = 1.0
+
+        let anchor = AnchorEntity(world: position)
+        anchor.addChild(discEntity)
+        anchor.addChild(poleEntity)
+        anchor.addChild(sphereEntity)
+        arView.scene.addAnchor(anchor)
+        alignmentMarkers.append(anchor)
+    }
+
+    private func drawAlignmentLine(from p1: SIMD3<Float>, to p2: SIMD3<Float>) {
+        guard let arView = arView else { return }
+
+        let dx = p2.x - p1.x
+        let dz = p2.z - p1.z
+        let length = sqrt(dx * dx + dz * dz)
+        let midpoint = (p1 + p2) / 2
+        let angle = atan2(dz, dx)
+
+        // Extend the line well beyond the two points for visibility
+        let extendedLength = max(length, 10.0)
+
+        let mesh = MeshResource.generateBox(width: extendedLength, height: 0.003, depth: 0.008)
+        var material = UnlitMaterial()
+        material.color = .init(tint: .cyan)
+        let lineEntity = ModelEntity(mesh: mesh, materials: [material])
+        lineEntity.orientation = simd_quatf(angle: -angle, axis: SIMD3(0, 1, 0))
+
+        let anchor = AnchorEntity(world: SIMD3<Float>(midpoint.x, midpoint.y + 0.001, midpoint.z))
+        anchor.addChild(lineEntity)
+        arView.scene.addAnchor(anchor)
+        alignmentLine = anchor
+    }
+
+    private func clearAlignmentVisuals() {
+        for marker in alignmentMarkers {
+            arView?.scene.removeAnchor(marker)
         }
+        alignmentMarkers.removeAll()
+        alignmentPoints.removeAll()
+        alignmentPointCount = 0
 
-        // Circular mean of angles (handles wraparound)
-        let sinSum = angles.reduce(Float(0)) { $0 + sin(2 * $1) }
-        let cosSum = angles.reduce(Float(0)) { $0 + cos(2 * $1) }
-        let meanAngle = atan2(sinSum, cosSum) / 2
-
-        // Snap to nearest 90°
-        let snappedAngle = (meanAngle / (.pi / 2)).rounded() * (.pi / 2)
-
-        gridRotation = snappedAngle
-        updateGridRotation()
+        if let line = alignmentLine {
+            arView?.scene.removeAnchor(line)
+            alignmentLine = nil
+        }
     }
 
     // MARK: - Calibration
 
     func confirmAlignment() {
+        clearAlignmentVisuals()
         state = .ready
     }
 
@@ -213,8 +226,7 @@ class ARSessionManager: ObservableObject {
 
     // MARK: - Column Placement
 
-    func handleTap(at point: CGPoint) {
-        guard state == .ready || state == .contentPlaced else { return }
+    private func handlePlacementTap(at point: CGPoint) {
         guard let arView = arView else { return }
 
         let results = arView.raycast(from: point, allowing: .existingPlaneGeometry, alignment: .horizontal)
@@ -276,13 +288,8 @@ class ARSessionManager: ObservableObject {
             column.parent?.removeFromParent()
         }
         columns.removeAll()
+        clearAlignmentVisuals()
 
-        if !wallAnchors.isEmpty {
-            state = .calibrating
-        } else if floorAnchor != nil {
-            state = .scanning
-        } else {
-            state = .coaching
-        }
+        state = floorAnchor != nil ? .aligning : .coaching
     }
 }

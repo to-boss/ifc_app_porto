@@ -9,7 +9,7 @@ struct ARContainerView: UIViewRepresentable {
         let arView = ARView(frame: .zero)
 
         let config = ARWorldTrackingConfiguration()
-        config.planeDetection = [.horizontal, .vertical]
+        config.planeDetection = [.horizontal]
         config.environmentTexturing = .automatic
         arView.session.run(config)
 
@@ -88,15 +88,6 @@ struct ARContainerView: UIViewRepresentable {
                 guard let planeAnchor = anchor as? ARPlaneAnchor else { continue }
                 Task { @MainActor in
                     arManager.handlePlaneAnchorUpdated(planeAnchor)
-                }
-            }
-        }
-
-        func session(_ session: ARSession, didRemove anchors: [ARAnchor]) {
-            for anchor in anchors {
-                guard let planeAnchor = anchor as? ARPlaneAnchor else { continue }
-                Task { @MainActor in
-                    arManager.handlePlaneAnchorRemoved(planeAnchor)
                 }
             }
         }
