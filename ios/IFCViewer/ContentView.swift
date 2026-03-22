@@ -11,6 +11,7 @@ struct ShareSheet: UIViewControllerRepresentable {
 struct ContentView: View {
     @StateObject private var arManager = ARSessionManager()
     @State private var showDebugLog = false
+    @State private var showFixturePicker = false
     @State private var showBCFSheet = false
     @State private var showBCFList = false
     @State private var bcfTitle = ""
@@ -65,11 +66,7 @@ struct ContentView: View {
                     .padding(.horizontal, 20)
                 }
 
-                // Fixture picker
-                if arManager.state == .roomPlaced && arManager.selectedElement == nil {
-                    fixturePicker
-                        .padding(.horizontal, 20)
-                }
+                // (fixture picker moved to sidebar overlay)
 
                 // Debug log (above toolbar)
                 if showDebugLog && !arManager.debugLog.isEmpty {
@@ -182,6 +179,11 @@ struct ContentView: View {
                 }
                 .padding(.horizontal, 16)
                 .padding(.bottom, 20)
+            }
+
+            // Fixture sidebar
+            if arManager.state == .roomPlaced && arManager.selectedElement == nil {
+                fixtureSidebar
             }
 
             // Floating bubble action menu
@@ -493,34 +495,54 @@ struct ContentView: View {
 
     // MARK: - Fixture Picker
 
-    private var fixturePicker: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Add Fixture")
-                .font(.subheadline)
-                .fontWeight(.semibold)
-
-            HStack(spacing: 12) {
-                fixtureButton(label: "Toilet", icon: "toilet", filename: "Objekt_WC")
-                fixtureButton(label: "Sink", icon: "drop", filename: "Objekt_Waschbecken")
-                fixtureButton(label: "Accessible WC", icon: "figure.roll", filename: "Objekt_WC_Beh_")
+    private var fixtureSidebar: some View {
+        HStack(spacing: 0) {
+            if showFixturePicker {
+                ScrollView {
+                    VStack(spacing: 8) {
+                        fixtureButton(label: "Toilet", icon: "toilet", filename: "Objekt_WC")
+                        fixtureButton(label: "Sink", icon: "drop", filename: "Objekt_Waschbecken")
+                        fixtureButton(label: "Access. WC", icon: "figure.roll", filename: "Objekt_WC_Beh_")
+                    }
+                    .padding(.vertical, 12)
+                    .padding(.horizontal, 8)
+                }
+                .frame(width: 80)
+                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16))
+                .transition(.move(edge: .leading).combined(with: .opacity))
             }
+
+            Button(action: { withAnimation(.spring(duration: 0.3)) { showFixturePicker.toggle() } }) {
+                Image(systemName: showFixturePicker ? "xmark" : "plus.square.on.square")
+                    .font(.title3)
+                    .fontWeight(.semibold)
+                    .padding(12)
+                    .background(.ultraThinMaterial, in: Circle())
+            }
+            .padding(.leading, showFixturePicker ? 4 : 0)
+
+            Spacer()
         }
-        .padding(16)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16))
+        .padding(.leading, 12)
+        .frame(maxHeight: .infinity, alignment: .center)
     }
 
     private func fixtureButton(label: String, icon: String, filename: String) -> some View {
-        Button(action: { arManager.loadFixture(named: filename) }) {
-            VStack(spacing: 6) {
+        Button(action: {
+            arManager.loadFixture(named: filename)
+            withAnimation(.spring(duration: 0.3)) { showFixturePicker = false }
+        }) {
+            VStack(spacing: 4) {
                 Image(systemName: icon)
-                    .font(.title2)
+                    .font(.title3)
                 Text(label)
-                    .font(.caption2)
+                    .font(.system(size: 9))
                     .fontWeight(.medium)
+                    .lineLimit(2)
+                    .multilineTextAlignment(.center)
             }
-            .frame(width: 80, height: 64)
-            .background(.white.opacity(0.15), in: RoundedRectangle(cornerRadius: 12))
+            .frame(width: 64, height: 56)
+            .background(.white.opacity(0.15), in: RoundedRectangle(cornerRadius: 10))
         }
         .foregroundStyle(.primary)
     }
