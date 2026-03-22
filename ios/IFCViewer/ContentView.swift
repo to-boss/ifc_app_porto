@@ -19,6 +19,7 @@ struct ContentView: View {
     @State private var bcfPriority = "Normal"
     @State private var bcfStatus = "Open"
     @State private var bcfAssignee = ""
+    @State private var exportURLs: [URL] = []
     @State private var capturedSnapshot: UIImage?
     @State private var capturedViewpoint: ARSessionManager.CameraViewpoint?
     @State private var bcfElementGlobalId: String?
@@ -198,8 +199,16 @@ struct ContentView: View {
 
                         if arManager.state == .roomPlaced || arManager.state == .done {
                             Menu {
+                                Button(action: { exportAll() }) {
+                                    Label("Export All", systemImage: "arrow.down.doc")
+                                }
                                 Button(action: { arManager.exportMergedIFC() }) {
                                     Label("Export IFC", systemImage: "square.and.arrow.up")
+                                }
+                                if !arManager.bcfIssues.isEmpty {
+                                    Button(action: { exportBCFOnly() }) {
+                                        Label("Export BCF", systemImage: "doc.zipper")
+                                    }
                                 }
                                 Button(action: { startBCFReport(element: nil) }) {
                                     Label("Report Issue", systemImage: "exclamationmark.bubble")
@@ -207,9 +216,6 @@ struct ContentView: View {
                                 if !arManager.bcfIssues.isEmpty {
                                     Button(action: { showBCFList = true }) {
                                         Label("BCF Issues (\(arManager.bcfIssues.count))", systemImage: "doc.text")
-                                    }
-                                    Button(action: { exportAllBCF() }) {
-                                        Label("Export All", systemImage: "arrow.down.doc")
                                     }
                                 }
                             } label: {
@@ -295,6 +301,12 @@ struct ContentView: View {
             if let url = arManager.exportFileURL {
                 ShareSheet(items: [url])
             }
+        }
+        .sheet(isPresented: Binding(
+            get: { !exportURLs.isEmpty },
+            set: { if !$0 { exportURLs = [] } }
+        )) {
+            ShareSheet(items: exportURLs)
         }
         .sheet(isPresented: $showBCFSheet) {
             bcfFormSheet
@@ -391,7 +403,33 @@ struct ContentView: View {
         showBCFSheet = false
     }
 
-    private func exportAllBCF() {
+    private func exportAll() {
+        var urls: [URL] = []
+
+        // Export IFC
+        arManager.exportMergedIFC()
+        if let ifcURL = arManager.exportFileURL {
+            urls.append(ifcURL)
+            arManager.exportFileURL = nil
+        }
+
+        // Export BCF if there are issues
+        if !arManager.bcfIssues.isEmpty {
+            do {
+                let bcfURL = try BCFExporter.export(issues: arManager.bcfIssues)
+                urls.append(bcfURL)
+                arManager.log("BCF exported \(arManager.bcfIssues.count) issues")
+            } catch {
+                arManager.log("BCF export failed: \(error)")
+            }
+        }
+
+        if !urls.isEmpty {
+            exportURLs = urls
+        }
+    }
+
+    private func exportBCFOnly() {
         do {
             let url = try BCFExporter.export(issues: arManager.bcfIssues)
             arManager.log("BCF exported \(arManager.bcfIssues.count) issues: \(url.lastPathComponent)")
@@ -447,7 +485,7 @@ struct ContentView: View {
                     Button("Close") { showBCFList = false }
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Export All") { exportAllBCF() }
+                    Button("Export BCF") { exportBCFOnly() }
                         .disabled(arManager.bcfIssues.isEmpty)
                 }
             }
