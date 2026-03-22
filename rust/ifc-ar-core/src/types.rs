@@ -1,35 +1,34 @@
 /// A parsed IFC model with elements, spatial tree, and bounds.
-/// This is the UniFFI-exposed type (no raw geometry — use GLB instead).
 pub struct IfcModel {
     pub elements: Vec<IfcElement>,
     pub spatial_tree: SpatialTree,
     pub bounds: ModelBounds,
 }
 
-/// A single IFC building element (UniFFI-exposed, no geometry).
+/// A single IFC building element with optional geometry.
 pub struct IfcElement {
     pub id: u64,
     pub ifc_type: String,
     pub name: Option<String>,
     pub global_id: Option<String>,
     pub color: ElementColor,
+    pub geometry: Option<MeshData>,
     pub properties: Vec<IfcProperty>,
 }
 
-/// Internal element type with geometry data.
-/// Not exposed through UniFFI — geometry goes through GLB.
+/// Internal element type used during processing.
+/// Uses ifc-lite-geometry's Mesh directly.
 pub struct InternalElement {
     pub id: u64,
     pub ifc_type: String,
     pub name: Option<String>,
     pub global_id: Option<String>,
-    pub geometry: Option<MeshData>,
+    pub geometry: Option<ifc_lite_geometry::Mesh>,
     pub color: ElementColor,
     pub properties: Vec<IfcProperty>,
 }
 
 impl InternalElement {
-    /// Convert to the UniFFI-exposed type (strip geometry).
     pub fn to_ifc_element(&self) -> IfcElement {
         IfcElement {
             id: self.id,
@@ -37,12 +36,17 @@ impl InternalElement {
             name: self.name.clone(),
             global_id: self.global_id.clone(),
             color: self.color,
+            geometry: self.geometry.as_ref().map(|m| MeshData {
+                positions: m.positions.clone(),
+                normals: m.normals.clone(),
+                indices: m.indices.clone(),
+            }),
             properties: self.properties.clone(),
         }
     }
 }
 
-/// Raw triangle mesh data (positions, normals, indices).
+/// Triangle mesh data exposed through UniFFI.
 #[derive(Clone, Default)]
 pub struct MeshData {
     pub positions: Vec<f32>,

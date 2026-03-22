@@ -7,7 +7,7 @@ pub mod parser;
 pub mod types;
 
 use error::IfcArError;
-use types::{ElementColor, IfcElement, IfcModel, IfcProperty, ModelBounds, SpatialNode, SpatialTree};
+use types::{ElementColor, IfcElement, IfcModel, IfcProperty, MeshData, ModelBounds, SpatialNode, SpatialTree};
 
 // UniFFI scaffolding
 uniffi::include_scaffolding!("ifc_ar_core");
@@ -35,7 +35,6 @@ pub fn parse_ifc(data: Vec<u8>) -> Result<IfcModel, IfcArError> {
     let mut decoder = parser::create_decoder(&parsed);
     let spatial_tree = metadata::build_spatial_tree(&parsed, &mut decoder);
 
-    // Convert internal elements to UniFFI-exposed type (strip geometry)
     let ifc_elements: Vec<IfcElement> = elements.iter().map(|e| e.to_ifc_element()).collect();
 
     Ok(IfcModel {

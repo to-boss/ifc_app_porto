@@ -2,12 +2,15 @@ import Foundation
 import ARKit
 import RealityKit
 import Combine
+import os
+
+private let logger = Logger(subsystem: "com.ifcar.viewer", category: "ARSession")
 
 enum ARState {
     case coaching
     case aligning
     case calibrating
-    case ready
+    case loading
     case contentPlaced
 }
 
@@ -16,22 +19,13 @@ class ARSessionManager: ObservableObject {
     @Published var state: ARState = .coaching
     @Published var gridRotation: Float = 0
     @Published var alignmentPointCount: Int = 0
+    @Published var loadingError: String?
+    @Published var debugLog: [String] = []
 
-    var statusText: String {
-        switch state {
-        case .coaching:
-            return "Move your device to scan the floor"
-        case .aligning:
-            return alignmentPointCount == 0
-                ? "Tap 2 points along a wall edge"
-                : "Tap a second point along the wall"
-        case .calibrating:
-            return "Twist to fine-tune, then confirm"
-        case .ready:
-            return "Tap to place column"
-        case .contentPlaced:
-            return "Tap to place more columns"
-        }
+    func log(_ msg: String) {
+        logger.info("\(msg)")
+        debugLog.append(msg)
+        if debugLog.count > 30 { debugLog.removeFirst() }
     }
 
     weak var arView: ARView?
@@ -44,7 +38,7 @@ class ARSessionManager: ObservableObject {
     private var alignmentMarkers: [AnchorEntity] = []
     private var alignmentLine: AnchorEntity?
 
-    private var columns: [ModelEntity] = []
+    private var modelAnchor: AnchorEntity?
 
     let gridSpacing: Float = 0.5
 
@@ -95,8 +89,6 @@ class ARSessionManager: ObservableObject {
 
         if state == .aligning {
             handleAlignmentTap(at: point)
-        } else if state == .ready || state == .contentPlaced {
-            handlePlacementTap(at: point)
         }
     }
 
@@ -209,7 +201,65 @@ class ARSessionManager: ObservableObject {
 
     func confirmAlignment() {
         clearAlignmentVisuals()
-        state = .ready
+        state = .loading
+        loadIFCModel()
+    }
+
+    // MARK: - IFC Model Loading
+
+    private func loadIFCModel() {
+        loadingError = nil
+        log("Starting IFC model load...")
+        IFCLoader.onLog = { [weak self] msg in self?.log(msg) }
+
+        // Phase 1: Parse on background thread
+        // Phase 2: Build meshes on main thread (MeshResource requires @MainActor)
+        Task.detached {
+            do {
+                let elements = try await IFCLoader.parseAndValidate(named: "Objekt_WC")
+
+                // Hop to main actor for mesh building + scene placement
+                await MainActor.run {
+                    self.finishLoading(elements)
+                }
+            } catch {
+                await MainActor.run {
+                    self.log("FAILED: \(error)")
+                    self.loadingError = "\(error)"
+                    self.state = .contentPlaced
+                }
+            }
+        }
+    }
+
+    private func finishLoading(_ elements: [ValidatedElement]) {
+        do {
+            let entity = try IFCLoader.buildEntities(from: elements)
+            log("Built \(entity.children.count) mesh children")
+
+            guard let arView = arView else {
+                log("ERROR: arView is nil")
+                return
+            }
+            guard let floorAnchor = floorAnchor else {
+                log("ERROR: floorAnchor is nil")
+                return
+            }
+
+            log("Placing at \(floorAnchor.position), rot=\(gridRotation)")
+            let anchor = AnchorEntity(world: floorAnchor.position)
+            anchor.orientation = simd_quatf(angle: gridRotation, axis: SIMD3(0, 1, 0))
+            anchor.addChild(entity)
+            arView.scene.addAnchor(anchor)
+            modelAnchor = anchor
+
+            log("Model placed OK")
+            state = .contentPlaced
+        } catch {
+            log("FAILED: \(error)")
+            loadingError = "\(error)"
+            state = .contentPlaced
+        }
     }
 
     // MARK: - Grid Rotation
@@ -224,71 +274,15 @@ class ARSessionManager: ObservableObject {
         updateGridRotation()
     }
 
-    // MARK: - Column Placement
-
-    private func handlePlacementTap(at point: CGPoint) {
-        guard let arView = arView else { return }
-
-        let results = arView.raycast(from: point, allowing: .existingPlaneGeometry, alignment: .horizontal)
-        guard let result = results.first else { return }
-
-        let worldPosition = SIMD3<Float>(
-            result.worldTransform.columns.3.x,
-            result.worldTransform.columns.3.y,
-            result.worldTransform.columns.3.z
-        )
-
-        let snapped = snapToGrid(worldPosition)
-        placeColumn(at: snapped)
-    }
-
-    private func placeColumn(at position: SIMD3<Float>) {
-        let height: Float = 3.0
-        let radius: Float = 0.15
-
-        let mesh = MeshResource.generateCylinder(height: height, radius: radius)
-        let material = SimpleMaterial(color: .init(white: 0.7, alpha: 1.0), roughness: 0.8, isMetallic: false)
-        let column = ModelEntity(mesh: mesh, materials: [material])
-
-        let columnPos = SIMD3<Float>(position.x, position.y + height / 2, position.z)
-        let anchor = AnchorEntity(world: columnPos)
-        anchor.addChild(column)
-        arView?.scene.addAnchor(anchor)
-
-        columns.append(column)
-        state = .contentPlaced
-    }
-
-    func snapToGrid(_ worldPoint: SIMD3<Float>) -> SIMD3<Float> {
-        let cosA = cosf(-gridRotation)
-        let sinA = sinf(-gridRotation)
-        let local = SIMD3<Float>(
-            worldPoint.x * cosA - worldPoint.z * sinA,
-            worldPoint.y,
-            worldPoint.x * sinA + worldPoint.z * cosA
-        )
-        let snapped = SIMD3<Float>(
-            (local.x / gridSpacing).rounded() * gridSpacing,
-            local.y,
-            (local.z / gridSpacing).rounded() * gridSpacing
-        )
-        let cosB = cosf(gridRotation)
-        let sinB = sinf(gridRotation)
-        return SIMD3<Float>(
-            snapped.x * cosB - snapped.z * sinB,
-            snapped.y,
-            snapped.x * sinB + snapped.z * cosB
-        )
-    }
-
     // MARK: - Reset
 
     func reset() {
-        for column in columns {
-            column.parent?.removeFromParent()
+        if let anchor = modelAnchor {
+            arView?.scene.removeAnchor(anchor)
+            modelAnchor = nil
         }
-        columns.removeAll()
         clearAlignmentVisuals()
+        loadingError = nil
 
         state = floorAnchor != nil ? .aligning : .coaching
     }

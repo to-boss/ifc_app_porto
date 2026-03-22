@@ -10,17 +10,23 @@
 		39CF3604C65F0300BD816AC3 /* ARContainerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 698D89F0D3FEAE9B22AA957B /* ARContainerView.swift */; };
 		4A2CED66A34A775B3B1450DE /* IFCViewerApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2628624924339AD6B80B95B /* IFCViewerApp.swift */; };
 		70244BFB856366DC6B44248F /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7F16132FBF3CF73A59281801 /* ContentView.swift */; };
+		86E2AA8B2910CF90632D02A5 /* ifc_ar_core.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0002D063105BAE17D7A05D74 /* ifc_ar_core.swift */; };
 		ACF83AA7B2727EC593332612 /* ARSessionManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = FECB64B299F294F02C45073E /* ARSessionManager.swift */; };
 		BA7DD3F456050B67C42D3DE4 /* FloorGridEntity.swift in Sources */ = {isa = PBXBuildFile; fileRef = B81190815F9F9F55951EC9F6 /* FloorGridEntity.swift */; };
+		C419772B5CBF27E35C31CCF5 /* Objekt_WC.ifc in Resources */ = {isa = PBXBuildFile; fileRef = BAE96894DBFDA734CEB090BB /* Objekt_WC.ifc */; };
+		D5E417124EE076B89C823EBA /* IFCLoader.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6B151DED304A69F779A5CED0 /* IFCLoader.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		0002D063105BAE17D7A05D74 /* ifc_ar_core.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ifc_ar_core.swift; sourceTree = "<group>"; };
 		2C3DBEB144063A48D550A7A5 /* IFCViewer.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = IFCViewer.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		698D89F0D3FEAE9B22AA957B /* ARContainerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ARContainerView.swift; sourceTree = "<group>"; };
+		6B151DED304A69F779A5CED0 /* IFCLoader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IFCLoader.swift; sourceTree = "<group>"; };
 		7F16132FBF3CF73A59281801 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		A160252F4CD05A717184B3CE /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		B2628624924339AD6B80B95B /* IFCViewerApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IFCViewerApp.swift; sourceTree = "<group>"; };
 		B81190815F9F9F55951EC9F6 /* FloorGridEntity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FloorGridEntity.swift; sourceTree = "<group>"; };
+		BAE96894DBFDA734CEB090BB /* Objekt_WC.ifc */ = {isa = PBXFileReference; path = Objekt_WC.ifc; sourceTree = "<group>"; };
 		FECB64B299F294F02C45073E /* ARSessionManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ARSessionManager.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -31,6 +37,7 @@
 				698D89F0D3FEAE9B22AA957B /* ARContainerView.swift */,
 				FECB64B299F294F02C45073E /* ARSessionManager.swift */,
 				B81190815F9F9F55951EC9F6 /* FloorGridEntity.swift */,
+				6B151DED304A69F779A5CED0 /* IFCLoader.swift */,
 			);
 			path = AR;
 			sourceTree = "<group>";
@@ -38,9 +45,26 @@
 		5122CF6D73855CCD8BEF9D4E = {
 			isa = PBXGroup;
 			children = (
+				B0C47520A0A132525C1B4F36 /* Generated */,
 				EB573BD01D385A7348AC013A /* IFCViewer */,
 				FD3F8BAB81191A189B4F52E6 /* Products */,
 			);
+			sourceTree = "<group>";
+		};
+		6C2E518C50C6A65FD69BBA71 /* Resources */ = {
+			isa = PBXGroup;
+			children = (
+				BAE96894DBFDA734CEB090BB /* Objekt_WC.ifc */,
+			);
+			path = Resources;
+			sourceTree = "<group>";
+		};
+		B0C47520A0A132525C1B4F36 /* Generated */ = {
+			isa = PBXGroup;
+			children = (
+				0002D063105BAE17D7A05D74 /* ifc_ar_core.swift */,
+			);
+			path = Generated;
 			sourceTree = "<group>";
 		};
 		EB573BD01D385A7348AC013A /* IFCViewer */ = {
@@ -50,6 +74,7 @@
 				B2628624924339AD6B80B95B /* IFCViewerApp.swift */,
 				A160252F4CD05A717184B3CE /* Info.plist */,
 				26B4FE338F8D80286B79F0E7 /* AR */,
+				6C2E518C50C6A65FD69BBA71 /* Resources */,
 			);
 			path = IFCViewer;
 			sourceTree = "<group>";
@@ -69,7 +94,9 @@
 			isa = PBXNativeTarget;
 			buildConfigurationList = E9B0182171B95485771AC539 /* Build configuration list for PBXNativeTarget "IFCViewer" */;
 			buildPhases = (
+				6112F7F7AC2A252781321954 /* Build Rust Library */,
 				CDA8C59818EA633A40957256 /* Sources */,
+				01831D89051C06A3085924A3 /* Resources */,
 			);
 			buildRules = (
 			);
@@ -116,6 +143,43 @@
 		};
 /* End PBXProject section */
 
+/* Begin PBXResourcesBuildPhase section */
+		01831D89051C06A3085924A3 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				C419772B5CBF27E35C31CCF5 /* Objekt_WC.ifc in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		6112F7F7AC2A252781321954 /* Build Rust Library */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Build Rust Library";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+				"$(PROJECT_DIR)/Generated/libifc_ar_core.a",
+				"$(PROJECT_DIR)/Generated/ifc_ar_core.swift",
+				"$(PROJECT_DIR)/Generated/ifc_ar_coreFFI.h",
+				"$(PROJECT_DIR)/Generated/ifc_ar_coreFFI.modulemap",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "set -e\n\n# Determine Rust target from Xcode build settings\nif [ \"$PLATFORM_NAME\" = \"iphonesimulator\" ]; then\n  RUST_TARGET=\"aarch64-apple-ios-sim\"\nelse\n  RUST_TARGET=\"aarch64-apple-ios\"\nfi\n\nRUST_PROJECT_DIR=\"$PROJECT_DIR/../rust/ifc-ar-core\"\nCARGO_TARGET_DIR=\"$PROJECT_DIR/../target\"\nOUTPUT_DIR=\"$PROJECT_DIR/Generated\"\n\nmkdir -p \"$OUTPUT_DIR\"\n\n# Build the Rust static library\ncargo build --manifest-path \"$RUST_PROJECT_DIR/Cargo.toml\" --release --target \"$RUST_TARGET\"\n\n# Copy the static library\ncp \"$CARGO_TARGET_DIR/$RUST_TARGET/release/libifc_ar_core.a\" \"$OUTPUT_DIR/\"\n\n# Generate Swift bindings (use host-built library for metadata)\n# Build for host first if needed\ncargo build --manifest-path \"$RUST_PROJECT_DIR/Cargo.toml\" --release\ncargo run --manifest-path \"$RUST_PROJECT_DIR/Cargo.toml\" --bin uniffi-bindgen -- \\\n  generate --library \"$CARGO_TARGET_DIR/release/libifc_ar_core.dylib\" \\\n  --language swift --out-dir \"$OUTPUT_DIR\"\n\n# Move FFI module files into a subdirectory so Swift can find the modulemap\nmkdir -p \"$OUTPUT_DIR/ifc_ar_coreFFI\"\nmv \"$OUTPUT_DIR/ifc_ar_coreFFI.h\" \"$OUTPUT_DIR/ifc_ar_coreFFI/\"\nmv \"$OUTPUT_DIR/ifc_ar_coreFFI.modulemap\" \"$OUTPUT_DIR/ifc_ar_coreFFI/module.modulemap\"\n";
+		};
+/* End PBXShellScriptBuildPhase section */
+
 /* Begin PBXSourcesBuildPhase section */
 		CDA8C59818EA633A40957256 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
@@ -125,7 +189,9 @@
 				ACF83AA7B2727EC593332612 /* ARSessionManager.swift in Sources */,
 				70244BFB856366DC6B44248F /* ContentView.swift in Sources */,
 				BA7DD3F456050B67C42D3DE4 /* FloorGridEntity.swift in Sources */,
+				D5E417124EE076B89C823EBA /* IFCLoader.swift in Sources */,
 				4A2CED66A34A775B3B1450DE /* IFCViewerApp.swift in Sources */,
+				86E2AA8B2910CF90632D02A5 /* ifc_ar_core.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -200,9 +266,18 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
+				LIBRARY_SEARCH_PATHS = (
+					"$(PROJECT_DIR)/Generated",
+				);
+				OTHER_LDFLAGS = (
+					"-lifc_ar_core",
+				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.ifcar.viewer;
 				SDKROOT = iphoneos;
 				SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SWIFT_INCLUDE_PATHS = (
+					"$(PROJECT_DIR)/Generated/ifc_ar_coreFFI",
+				);
 				SWIFT_VERSION = 5.9;
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
@@ -220,9 +295,18 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
+				LIBRARY_SEARCH_PATHS = (
+					"$(PROJECT_DIR)/Generated",
+				);
+				OTHER_LDFLAGS = (
+					"-lifc_ar_core",
+				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.ifcar.viewer;
 				SDKROOT = iphoneos;
 				SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SWIFT_INCLUDE_PATHS = (
+					"$(PROJECT_DIR)/Generated/ifc_ar_coreFFI",
+				);
 				SWIFT_VERSION = 5.9;
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};

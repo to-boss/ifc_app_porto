@@ -30,7 +30,7 @@ struct ARContainerView: UIViewRepresentable {
             coaching.trailingAnchor.constraint(equalTo: arView.trailingAnchor),
         ])
 
-        // Tap gesture for placing columns
+        // Tap gesture for alignment and interaction
         let tapGesture = UITapGestureRecognizer(
             target: context.coordinator,
             action: #selector(Coordinator.handleTap(_:))

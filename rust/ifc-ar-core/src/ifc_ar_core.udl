@@ -26,7 +26,14 @@ dictionary IfcElement {
     string? name;
     string? global_id;
     ElementColor color;
+    MeshData? geometry;
     sequence<IfcProperty> properties;
+};
+
+dictionary MeshData {
+    sequence<float> positions;
+    sequence<float> normals;
+    sequence<u32> indices;
 };
 
 dictionary ElementColor {

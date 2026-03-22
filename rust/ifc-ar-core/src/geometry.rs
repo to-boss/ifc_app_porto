@@ -1,10 +1,11 @@
-use ifc_lite_geometry::{GeometryRouter, Mesh};
+use ifc_lite_core::has_geometry_by_name;
+use ifc_lite_geometry::GeometryRouter;
 use rustc_hash::FxHashMap;
 
 use crate::color::{build_style_index, default_color_for_type};
 use crate::error::IfcArError;
 use crate::parser::ParsedIfc;
-use crate::types::{ElementColor, InternalElement, MeshData, ModelBounds};
+use crate::types::{ElementColor, InternalElement, ModelBounds};
 
 /// Process all geometry-bearing entities in the parsed IFC file.
 ///
@@ -23,20 +24,20 @@ pub fn process_geometry(
     let mut elements = Vec::new();
     let mut bounds = ModelBounds::default();
 
-    // Process each geometry-bearing entity
-    for scanned in &parsed.geometry_entities {
+    // Process only geometry-bearing entities (IfcProduct subtypes)
+    for scanned in parsed.all_entities.iter().filter(|e| has_geometry_by_name(&e.ifc_type)) {
         let Ok(entity) = decoder.decode_by_id(scanned.id) else {
             continue;
         };
 
         // Use GeometryRouter to process the element's representation chain
-        let mesh_data = match router.process_element(&entity, &mut decoder) {
+        let mesh = match router.process_element(&entity, &mut decoder) {
             Ok(mesh) if !mesh.is_empty() => {
-                let mut md = mesh_to_mesh_data(&mesh);
-                z_up_to_y_up(&mut md.positions);
-                z_up_to_y_up(&mut md.normals);
-                bounds.extend_from_positions(&md.positions);
-                Some(md)
+                let mut mesh = mesh;
+                z_up_to_y_up(&mut mesh.positions);
+                z_up_to_y_up(&mut mesh.normals);
+                bounds.extend_from_positions(&mesh.positions);
+                Some(mesh)
             }
             _ => None,
         };
@@ -53,7 +54,7 @@ pub fn process_geometry(
             ifc_type: scanned.ifc_type.clone(),
             name,
             global_id,
-            geometry: mesh_data,
+            geometry: mesh,
             color,
             properties: Vec::new(),
         });
@@ -77,15 +78,6 @@ pub fn process_geometry(
     }
 
     Ok((elements, bounds))
-}
-
-/// Convert ifc-lite-geometry Mesh to our MeshData type.
-fn mesh_to_mesh_data(mesh: &Mesh) -> MeshData {
-    MeshData {
-        positions: mesh.positions.clone(),
-        normals: mesh.normals.clone(),
-        indices: mesh.indices.clone(),
-    }
 }
 
 /// Transform positions/normals from IFC Z-up to glTF/AR Y-up coordinate system.

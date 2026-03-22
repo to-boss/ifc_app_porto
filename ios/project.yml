@@ -12,6 +12,8 @@ targets:
     platform: iOS
     sources:
       - IFCViewer
+      - path: Generated/ifc_ar_core.swift
+        optional: true
     settings:
       base:
         INFOPLIST_FILE: IFCViewer/Info.plist
@@ -21,6 +23,9 @@ targets:
         SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD: "NO"
         DEVELOPMENT_TEAM: RTM84NZJZ2
         CODE_SIGN_STYLE: Automatic
+        LIBRARY_SEARCH_PATHS: ["$(PROJECT_DIR)/Generated"]
+        SWIFT_INCLUDE_PATHS: ["$(PROJECT_DIR)/Generated/ifc_ar_coreFFI"]
+        OTHER_LDFLAGS: ["-lifc_ar_core"]
     info:
       path: IFCViewer/Info.plist
       properties:
@@ -32,3 +37,47 @@ targets:
           - UIInterfaceOrientationPortrait
           - UIInterfaceOrientationLandscapeLeft
           - UIInterfaceOrientationLandscapeRight
+    resources:
+      - path: IFCViewer/Resources
+        type: folder
+    preBuildScripts:
+      - name: Build Rust Library
+        script: |
+          set -e
+
+          # Determine Rust target from Xcode build settings
+          if [ "$PLATFORM_NAME" = "iphonesimulator" ]; then
+            RUST_TARGET="aarch64-apple-ios-sim"
+          else
+            RUST_TARGET="aarch64-apple-ios"
+          fi
+
+          RUST_PROJECT_DIR="$PROJECT_DIR/../rust/ifc-ar-core"
+          CARGO_TARGET_DIR="$PROJECT_DIR/../target"
+          OUTPUT_DIR="$PROJECT_DIR/Generated"
+
+          mkdir -p "$OUTPUT_DIR"
+
+          # Build the Rust static library
+          cargo build --manifest-path "$RUST_PROJECT_DIR/Cargo.toml" --release --target "$RUST_TARGET"
+
+          # Copy the static library
+          cp "$CARGO_TARGET_DIR/$RUST_TARGET/release/libifc_ar_core.a" "$OUTPUT_DIR/"
+
+          # Generate Swift bindings (use host-built library for metadata)
+          # Build for host first if needed
+          cargo build --manifest-path "$RUST_PROJECT_DIR/Cargo.toml" --release
+          cargo run --manifest-path "$RUST_PROJECT_DIR/Cargo.toml" --bin uniffi-bindgen -- \
+            generate --library "$CARGO_TARGET_DIR/release/libifc_ar_core.dylib" \
+            --language swift --out-dir "$OUTPUT_DIR"
+
+          # Move FFI module files into a subdirectory so Swift can find the modulemap
+          mkdir -p "$OUTPUT_DIR/ifc_ar_coreFFI"
+          mv "$OUTPUT_DIR/ifc_ar_coreFFI.h" "$OUTPUT_DIR/ifc_ar_coreFFI/"
+          mv "$OUTPUT_DIR/ifc_ar_coreFFI.modulemap" "$OUTPUT_DIR/ifc_ar_coreFFI/module.modulemap"
+        basedOnDependencyAnalysis: false
+        outputFiles:
+          - $(PROJECT_DIR)/Generated/libifc_ar_core.a
+          - $(PROJECT_DIR)/Generated/ifc_ar_core.swift
+          - $(PROJECT_DIR)/Generated/ifc_ar_coreFFI.h
+          - $(PROJECT_DIR)/Generated/ifc_ar_coreFFI.modulemap
