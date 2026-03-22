@@ -1,0 +1,60 @@
+namespace ifc_ar_core {
+    [Throws=IfcArError]
+    bytes parse_and_export_glb(bytes data);
+
+    [Throws=IfcArError]
+    IfcModel parse_ifc(bytes data);
+};
+
+[Error]
+enum IfcArError {
+    "ParseError",
+    "GeometryError",
+    "GltfExportError",
+    "InvalidInput",
+};
+
+dictionary IfcModel {
+    sequence<IfcElement> elements;
+    SpatialTree spatial_tree;
+    ModelBounds bounds;
+};
+
+dictionary IfcElement {
+    u64 id;
+    string ifc_type;
+    string? name;
+    string? global_id;
+    ElementColor color;
+    sequence<IfcProperty> properties;
+};
+
+dictionary ElementColor {
+    float r;
+    float g;
+    float b;
+    float a;
+};
+
+dictionary IfcProperty {
+    string name;
+    string value;
+    string? property_set;
+};
+
+dictionary SpatialTree {
+    sequence<SpatialNode> nodes;
+};
+
+dictionary SpatialNode {
+    u64 id;
+    string ifc_type;
+    string? name;
+    sequence<u64> children;
+};
+
+dictionary ModelBounds {
+    sequence<float> min_point;
+    sequence<float> max_point;
+    float diagonal;
+};

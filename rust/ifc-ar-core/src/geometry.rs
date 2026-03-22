@@ -1,0 +1,131 @@
+use ifc_lite_geometry::{GeometryRouter, Mesh};
+use rustc_hash::FxHashMap;
+
+use crate::color::{build_style_index, default_color_for_type};
+use crate::error::IfcArError;
+use crate::parser::ParsedIfc;
+use crate::types::{ElementColor, InternalElement, MeshData, ModelBounds};
+
+/// Process all geometry-bearing entities in the parsed IFC file.
+///
+/// Returns a list of IfcElements with mesh data and colors, plus model bounds.
+pub fn process_geometry(
+    parsed: &ParsedIfc,
+) -> Result<(Vec<InternalElement>, ModelBounds), IfcArError> {
+    let mut decoder = crate::parser::create_decoder(parsed);
+
+    // Build style index for color lookup
+    let style_map = build_style_index(parsed, &mut decoder);
+
+    // Create geometry router with automatic unit detection
+    let router = GeometryRouter::with_units(&parsed.content, &mut decoder);
+
+    let mut elements = Vec::new();
+    let mut bounds = ModelBounds::default();
+
+    // Process each geometry-bearing entity
+    for scanned in &parsed.geometry_entities {
+        let Ok(entity) = decoder.decode_by_id(scanned.id) else {
+            continue;
+        };
+
+        // Use GeometryRouter to process the element's representation chain
+        let mesh_data = match router.process_element(&entity, &mut decoder) {
+            Ok(mesh) if !mesh.is_empty() => {
+                let mut md = mesh_to_mesh_data(&mesh);
+                z_up_to_y_up(&mut md.positions);
+                z_up_to_y_up(&mut md.normals);
+                bounds.extend_from_positions(&md.positions);
+                Some(md)
+            }
+            _ => None,
+        };
+
+        // Resolve color: style map → default by type
+        let color = resolve_color(scanned.id, &scanned.ifc_type, &style_map);
+
+        // Extract name and global ID
+        let name = entity.get_string(2).map(|s| s.to_string());
+        let global_id = entity.get_string(0).map(|s| s.to_string());
+
+        elements.push(InternalElement {
+            id: scanned.id as u64,
+            ifc_type: scanned.ifc_type.clone(),
+            name,
+            global_id,
+            geometry: mesh_data,
+            color,
+            properties: Vec::new(),
+        });
+    }
+
+    // Center model at origin
+    if bounds.diagonal > 0.0 {
+        let center = bounds.center();
+        for element in &mut elements {
+            if let Some(ref mut mesh) = element.geometry {
+                center_positions(&mut mesh.positions, &center);
+            }
+        }
+        // Recalculate bounds after centering
+        bounds = ModelBounds::default();
+        for element in &elements {
+            if let Some(ref mesh) = element.geometry {
+                bounds.extend_from_positions(&mesh.positions);
+            }
+        }
+    }
+
+    Ok((elements, bounds))
+}
+
+/// Convert ifc-lite-geometry Mesh to our MeshData type.
+fn mesh_to_mesh_data(mesh: &Mesh) -> MeshData {
+    MeshData {
+        positions: mesh.positions.clone(),
+        normals: mesh.normals.clone(),
+        indices: mesh.indices.clone(),
+    }
+}
+
+/// Transform positions/normals from IFC Z-up to glTF/AR Y-up coordinate system.
+fn z_up_to_y_up(data: &mut [f32]) {
+    for chunk in data.chunks_exact_mut(3) {
+        let y = chunk[1];
+        chunk[1] = chunk[2]; // new Y = old Z (up)
+        chunk[2] = -y;       // new Z = -old Y (backward)
+    }
+}
+
+/// Subtract the center offset from all vertex positions.
+fn center_positions(positions: &mut [f32], center: &[f32; 3]) {
+    for chunk in positions.chunks_exact_mut(3) {
+        chunk[0] -= center[0];
+        chunk[1] -= center[1];
+        chunk[2] -= center[2];
+    }
+}
+
+/// Resolve color for an entity: style map first, then default by type.
+fn resolve_color(
+    entity_id: u32,
+    ifc_type: &str,
+    style_map: &FxHashMap<u32, [f32; 4]>,
+) -> ElementColor {
+    if let Some(color) = style_map.get(&entity_id) {
+        ElementColor {
+            r: color[0],
+            g: color[1],
+            b: color[2],
+            a: color[3],
+        }
+    } else {
+        let default = default_color_for_type(ifc_type);
+        ElementColor {
+            r: default[0],
+            g: default[1],
+            b: default[2],
+            a: default[3],
+        }
+    }
+}

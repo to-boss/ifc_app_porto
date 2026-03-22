@@ -1,0 +1,26 @@
+[package]
+name = "ifc-ar-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "IFC AR viewer core - parses IFC files and exports GLB for mobile AR"
+
+[lib]
+crate-type = ["lib", "cdylib", "staticlib"]
+
+[dependencies]
+ifc-lite-core.workspace = true
+ifc-lite-geometry.workspace = true
+uniffi.workspace = true
+gltf-json.workspace = true
+nalgebra.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+rustc-hash.workspace = true
+
+[dev-dependencies]
+gltf = "1"
+
+[build-dependencies]
+uniffi = { workspace = true, features = ["build"] }
