@@ -42,6 +42,8 @@ struct ElementInfo {
     let globalId: String?
     let properties: [IfcProperty]
     let anchor: AnchorEntity
+    let entity: Entity        // the actual ModelEntity that was tapped
+    let isRoomElement: Bool   // true = child of roomEntity (shared anchor)
 }
 
 enum IFCLoader {

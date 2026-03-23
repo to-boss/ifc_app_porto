@@ -161,6 +161,25 @@ struct ContentView: View {
                                     .background(.ultraThinMaterial, in: Capsule())
                             }
                         }
+                    } else if arManager.state == .elementMoving {
+                        HStack(spacing: 12) {
+                            Button(action: { arManager.placeMovingElement() }) {
+                                Label("Place", systemImage: "checkmark.circle.fill")
+                                    .font(.subheadline)
+                                    .fontWeight(.semibold)
+                                    .padding(.horizontal, 20)
+                                    .padding(.vertical, 12)
+                                    .background(.green.opacity(0.85), in: Capsule())
+                                    .foregroundStyle(.white)
+                            }
+                            Button(action: { arManager.cancelMovingElement() }) {
+                                Label("Cancel", systemImage: "xmark")
+                                    .font(.subheadline)
+                                    .padding(.horizontal, 16)
+                                    .padding(.vertical, 12)
+                                    .background(.ultraThinMaterial, in: Capsule())
+                            }
+                        }
                     } else if arManager.state == .roomPlaced {
                         Button(action: { arManager.finishSession() }) {
                             Label("Done", systemImage: "checkmark.seal.fill")
@@ -180,7 +199,7 @@ struct ContentView: View {
 
                     // Secondary actions (right)
                     HStack(spacing: 10) {
-                        if [.calibrating, .previewing, .fixturePreviewing, .roomPlaced, .wallStart, .wallEnd, .wallAdjust, .done].contains(arManager.state) {
+                        if [.calibrating, .previewing, .fixturePreviewing, .roomPlaced, .wallStart, .wallEnd, .wallAdjust, .elementMoving, .done].contains(arManager.state) {
                             Button(action: { arManager.reset() }) {
                                 Image(systemName: "arrow.counterclockwise")
                                     .font(.title3)
@@ -504,7 +523,7 @@ struct ContentView: View {
                 stepLine(done: isStepDone(3))
                 stepDot(step: 4, active: arManager.state == .loading || arManager.state == .previewing)
                 stepLine(done: isStepDone(4))
-                stepDot(step: 5, active: [.roomPlaced, .fixtureLoading, .fixturePreviewing, .wallStart, .wallEnd, .wallAdjust, .done].contains(arManager.state))
+                stepDot(step: 5, active: [.roomPlaced, .fixtureLoading, .fixturePreviewing, .wallStart, .wallEnd, .wallAdjust, .elementMoving, .done].contains(arManager.state))
             }
 
             // Current instruction
@@ -547,6 +566,8 @@ struct ContentView: View {
             return "Place wall end"
         case .wallAdjust:
             return "Adjust wall"
+        case .elementMoving:
+            return "Move element"
         case .done:
             return "Complete"
         }
@@ -581,6 +602,8 @@ struct ContentView: View {
             return "Move to extend the wall. Tap Place to set the endpoint."
         case .wallAdjust:
             return "Use sliders to set height and width, then Confirm."
+        case .elementMoving:
+            return "Move your device to reposition the element. Tap Place to confirm."
         case .done:
             return "All models placed. Tap Reset to start over."
         }
@@ -612,7 +635,7 @@ struct ContentView: View {
     }
 
     private func isStepDone(_ step: Int) -> Bool {
-        let laterStates: Set<ARState> = [.roomPlaced, .fixtureLoading, .fixturePreviewing, .wallStart, .wallEnd, .wallAdjust, .done]
+        let laterStates: Set<ARState> = [.roomPlaced, .fixtureLoading, .fixturePreviewing, .wallStart, .wallEnd, .wallAdjust, .elementMoving, .done]
         switch step {
         case 1:
             return arManager.alignmentPointCount >= 1 || arManager.state == .calibrating || arManager.state == .loading || arManager.state == .previewing || laterStates.contains(arManager.state)

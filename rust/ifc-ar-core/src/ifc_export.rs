@@ -15,6 +15,14 @@ pub struct FixtureExportInput {
     pub rotation_y: f32,
 }
 
+/// Input for a moved element — position offset in AR Y-up coordinates.
+pub struct ElementMoveInput {
+    pub element_id: u64,
+    pub offset_x: f32,
+    pub offset_y: f32,
+    pub offset_z: f32,
+}
+
 /// Input for a user-created wall to be included in the export.
 pub struct WallExportInput {
     pub positions: Vec<f32>,
@@ -182,7 +190,18 @@ pub fn export_combined_ifc_with_walls(
     room_data: &[u8],
     fixtures: &[FixtureExportInput],
     walls: &[WallExportInput],
+    deleted_ids: &[u64],
+    moved_elements: &[ElementMoveInput],
 ) -> Result<String, IfcArError> {
+    use std::collections::HashSet;
+
+    // Build lookup structures for deletions and moves
+    let deleted: HashSet<u64> = deleted_ids.iter().copied().collect();
+    let moves: HashMap<u64, (f32, f32, f32)> = moved_elements
+        .iter()
+        .map(|m| (m.element_id, (m.offset_x, m.offset_y, m.offset_z)))
+        .collect();
+
     // Parse room
     let room_parsed = parse_ifc_bytes(room_data)?;
     let (room_elements, _) = process_geometry(&room_parsed)?;
@@ -265,18 +284,22 @@ pub fn export_combined_ifc_with_walls(
     writeln!(out, "#{agg2}=IFCRELAGGREGATES('2000000000000000000002',#{owner},$,$,#{site},(#{building}));").unwrap();
     writeln!(out, "#{agg3}=IFCRELAGGREGATES('2000000000000000000003',#{owner},$,$,#{building},(#{storey}));").unwrap();
 
-    // Write room elements
+    // Write room elements (skip deleted, apply move offsets)
     let mut all_product_ids: Vec<u32> = Vec::new();
 
     for element in &room_elements {
+        if deleted.contains(&element.id) {
+            continue;
+        }
         if let Some(ref mesh) = element.geometry {
             if mesh.positions.is_empty() || mesh.indices.is_empty() {
                 continue;
             }
+            let (mx, my, mz) = moves.get(&element.id).copied().unwrap_or((0.0, 0.0, 0.0));
             if let Some(product_id) = write_element(
                 &mut out, &mut id, &mut shared,
                 element, mesh,
-                0.0, 0.0, 0.0, 0.0,
+                mx, my, mz, 0.0,
                 owner, sub_ctx, storey_placement,
             ) {
                 all_product_ids.push(product_id);

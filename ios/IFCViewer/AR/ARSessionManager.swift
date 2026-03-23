@@ -18,6 +18,7 @@ enum ARState {
     case wallStart         // centroid marker follows camera, waiting for Place
     case wallEnd           // live 3D wall preview, endpoint follows camera
     case wallAdjust        // both points locked, sliders for height/width
+    case elementMoving     // moving a room element within its parent
     case done              // all models placed
 }
 
@@ -80,6 +81,13 @@ class ARSessionManager: ObservableObject {
     private var elementMetadata: [UInt64: ValidatedElement] = [:]
     /// The tapped entity, used to track its screen position
     private var selectedEntityRef: Entity?
+    private var selectedOriginalMaterials: [(ModelEntity, [Material])] = []
+
+    // Element moving (room elements)
+    private var movingEntity: Entity?
+    private var movingOriginalPosition: SIMD3<Float>?
+    private var deletedElementIds: Set<UInt64> = []
+    private var movedElementOffsets: [UInt64: SIMD3<Float>] = [:]
 
     // Wall building
     private var wallStartPoint: SIMD3<Float>?
@@ -155,6 +163,8 @@ class ARSessionManager: ObservableObject {
         if state == .roomPlaced || state == .done {
             // If action menu is showing, dismiss it
             if selectedElement != nil {
+                IFCLoader.restoreMaterials(selectedOriginalMaterials)
+                selectedOriginalMaterials = []
                 selectedElement = nil
                 selectedEntityRef = nil
                 showingDetails = false
@@ -173,7 +183,8 @@ class ARSessionManager: ObservableObject {
                        let meta = elementMetadata[id] {
                         // Find the owning anchor
                         if let anchor = findOwningAnchor(for: e) {
-                            selectedEntityRef = anchor
+                            let isRoom = (anchor === roomAnchor)
+                            selectedEntityRef = e
                             selectedScreenPoint = point
                             selectedElement = ElementInfo(
                                 id: id,
@@ -181,9 +192,21 @@ class ARSessionManager: ObservableObject {
                                 name: meta.name,
                                 globalId: meta.globalId,
                                 properties: meta.properties,
-                                anchor: anchor
+                                anchor: anchor,
+                                entity: e,
+                                isRoomElement: isRoom
                             )
-                            log("Selected: \(meta.ifcType) #\(id)")
+                            // Highlight selected entity
+                            if let model = e as? ModelEntity, let mats = model.model?.materials {
+                                selectedOriginalMaterials = [(model, mats)]
+                                var highlight = PhysicallyBasedMaterial()
+                                highlight.baseColor = .init(tint: .systemYellow)
+                                highlight.metallic = .init(floatLiteral: 0.1)
+                                highlight.roughness = .init(floatLiteral: 0.5)
+                                highlight.blending = .transparent(opacity: .init(floatLiteral: 0.8))
+                                model.model?.materials = [highlight]
+                            }
+                            log("Selected: \(meta.ifcType) #\(id)\(isRoom ? " (room)" : "")")
                             return
                         }
                     }
@@ -404,6 +427,18 @@ class ARSessionManager: ObservableObject {
             }
         }
 
+        // Element moving: update position within room
+        if state == .elementMoving, let entity = movingEntity, let roomEnt = roomEntity {
+            let center = CGPoint(x: arView.bounds.midX, y: arView.bounds.midY)
+            let results = arView.raycast(from: center, allowing: .existingPlaneGeometry, alignment: .horizontal)
+            if let result = results.first {
+                let col = result.worldTransform.columns.3
+                let worldPos = SIMD3<Float>(col.x, col.y, col.z)
+                let localPos = roomEnt.convert(position: worldPos, from: nil)
+                entity.position = localPos
+            }
+        }
+
         // Wall building: update centroid marker and live preview
         if state == .wallStart || state == .wallEnd {
             updateWallPreview()
@@ -464,30 +499,78 @@ class ARSessionManager: ObservableObject {
 
     func moveSelectedElement() {
         guard let info = selectedElement else { return }
-        let anchor = info.anchor
 
-        // Remove from placed list
-        placedFixtures.removeAll { $0.anchor === anchor }
+        // Restore highlight before applying ghost
+        IFCLoader.restoreMaterials(selectedOriginalMaterials)
+        selectedOriginalMaterials = []
 
-        // Get the root entity (first child of anchor)
-        guard let entity = anchor.children.first else {
+        if info.isRoomElement {
+            // Move within room: change local position
+            let entity = info.entity
+            movingEntity = entity
+            movingOriginalPosition = entity.position
+
+            if let model = entity as? ModelEntity {
+                originalMaterials = [(model, model.model?.materials ?? [])]
+            }
+            IFCLoader.applyGhostEffect(to: entity)
+
             selectedElement = nil
-            return
+            selectedEntityRef = nil
+            state = .elementMoving
+            log("Moving room element \(info.ifcType) #\(info.id)")
+        } else {
+            // Fixture/wall: move the whole anchor
+            let anchor = info.anchor
+            placedFixtures.removeAll { $0.anchor === anchor }
+            createdWalls.removeAll { $0.anchor === anchor }
+
+            guard let entity = anchor.children.first else {
+                selectedElement = nil
+                return
+            }
+
+            originalMaterials = IFCLoader.collectMaterials(from: entity)
+            IFCLoader.applyGhostEffect(to: entity)
+
+            previewAnchor = anchor
+            previewEntity = entity
+            modelScale = entity.scale.x
+            modelRotation = 0
+            selectedElement = nil
+            selectedEntityRef = nil
+
+            state = .fixturePreviewing
+            log("Moving element \(info.ifcType) #\(info.id)")
+        }
+    }
+
+    func placeMovingElement() {
+        guard state == .elementMoving, let entity = movingEntity, let orig = movingOriginalPosition else { return }
+
+        // Record cumulative move offset
+        if let idStr = entity.name.split(separator: "_").last, let id = UInt64(idStr) {
+            let delta = entity.position - orig
+            movedElementOffsets[id, default: .zero] += delta
         }
 
-        // Apply ghost effect for preview
-        originalMaterials = IFCLoader.collectMaterials(from: entity)
-        IFCLoader.applyGhostEffect(to: entity)
+        IFCLoader.restoreMaterials(originalMaterials)
+        originalMaterials = []
+        movingEntity = nil
+        movingOriginalPosition = nil
+        state = .roomPlaced
+        log("Element placed")
+    }
 
-        previewAnchor = anchor
-        previewEntity = entity
-        modelScale = entity.scale.x
-        modelRotation = 0
-        selectedElement = nil
-        selectedEntityRef = nil
-
-        state = .fixturePreviewing
-        log("Moving element \(info.ifcType) #\(info.id)")
+    func cancelMovingElement() {
+        guard let entity = movingEntity, let orig = movingOriginalPosition else { return }
+        entity.position = orig
+        IFCLoader.restoreMaterials(originalMaterials)
+        originalMaterials = []
+        movingEntity = nil
+        movingOriginalPosition = nil
+        state = .roomPlaced
+        log("Move cancelled")
     }
 
     func showDetails() {
@@ -496,11 +579,19 @@ class ARSessionManager: ObservableObject {
 
     func deleteSelectedElement() {
         guard let info = selectedElement else { return }
-        let anchor = info.anchor
 
-        arView?.scene.removeAnchor(anchor)
-        placedFixtures.removeAll { $0.anchor === anchor }
-        createdWalls.removeAll { $0.anchor === anchor }
+        selectedOriginalMaterials = []  // entity is being removed, no need to restore
+
+        if info.isRoomElement {
+            // Remove just this entity from the room
+            deletedElementIds.insert(info.id)
+            info.entity.removeFromParent()
+        } else {
+            // Remove the whole anchor
+            arView?.scene.removeAnchor(info.anchor)
+            placedFixtures.removeAll { $0.anchor === info.anchor }
+            createdWalls.removeAll { $0.anchor === info.anchor }
+        }
         elementMetadata.removeValue(forKey: info.id)
 
         log("Deleted \(info.ifcType) #\(info.id)")
@@ -509,6 +600,8 @@ class ARSessionManager: ObservableObject {
     }
 
     func dismissSelection() {
+        IFCLoader.restoreMaterials(selectedOriginalMaterials)
+        selectedOriginalMaterials = []
         selectedElement = nil
         selectedEntityRef = nil
         showingDetails = false
@@ -794,10 +887,16 @@ class ARSessionManager: ObservableObject {
             ))
         }
 
-        log("Exporting \(fixtureInputs.count) fixtures + \(wallInputs.count) walls + room as fresh IFC4...")
+        // Build move inputs
+        var moveInputs: [ElementMoveInput] = []
+        for (id, offset) in movedElementOffsets {
+            moveInputs.append(ElementMoveInput(elementId: id, offsetX: offset.x, offsetY: offset.y, offsetZ: offset.z))
+        }
+
+        log("Exporting \(fixtureInputs.count) fixtures + \(wallInputs.count) walls + room (\(deletedElementIds.count) deleted, \(moveInputs.count) moved) as fresh IFC4...")
 
         do {
-            let ifcText = try exportCombinedIfcWithWalls(roomData: roomData, fixtures: fixtureInputs, walls: wallInputs)
+            let ifcText = try exportCombinedIfcWithWalls(roomData: roomData, fixtures: fixtureInputs, walls: wallInputs, deletedElementIds: Array(deletedElementIds), movedElements: moveInputs)
 
             // Write to temp file
             let tempDir = FileManager.default.temporaryDirectory
@@ -886,9 +985,19 @@ class ARSessionManager: ObservableObject {
         elementMetadata = [:]
         selectedElement = nil
         selectedEntityRef = nil
+        selectedOriginalMaterials = []
         showingDetails = false
         modelScale = 1.0
         modelRotation = 0
+
+        // Clear element moving state
+        if let entity = movingEntity, let orig = movingOriginalPosition {
+            entity.position = orig
+        }
+        movingEntity = nil
+        movingOriginalPosition = nil
+        deletedElementIds.removeAll()
+        movedElementOffsets.removeAll()
 
         // Clear wall building state
         if let marker = wallCentroidMarker {

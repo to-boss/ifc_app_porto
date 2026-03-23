@@ -91,6 +91,8 @@ pub fn export_combined_ifc_with_walls(
     room_data: Vec<u8>,
     fixtures: Vec<FixtureExportInput>,
     walls: Vec<WallExportInput>,
+    deleted_element_ids: Vec<u64>,
+    moved_elements: Vec<ElementMoveInput>,
 ) -> Result<String, IfcArError> {
     let fixture_inputs: Vec<ifc_export::FixtureExportInput> = fixtures
         .into_iter()
@@ -116,7 +118,24 @@ pub fn export_combined_ifc_with_walls(
             length: w.length,
         })
         .collect();
-    ifc_export::export_combined_ifc_with_walls(&room_data, &fixture_inputs, &wall_inputs)
+    let move_inputs: Vec<ifc_export::ElementMoveInput> = moved_elements
+        .into_iter()
+        .map(|m| ifc_export::ElementMoveInput {
+            element_id: m.element_id,
+            offset_x: m.offset_x,
+            offset_y: m.offset_y,
+            offset_z: m.offset_z,
+        })
+        .collect();
+    ifc_export::export_combined_ifc_with_walls(&room_data, &fixture_inputs, &wall_inputs, &deleted_element_ids, &move_inputs)
+}
+
+/// Input for a moved element (UniFFI-compatible dictionary).
+pub struct ElementMoveInput {
+    pub element_id: u64,
+    pub offset_x: f32,
+    pub offset_y: f32,
+    pub offset_z: f32,
 }
 
 /// Input for a user-created wall to export (UniFFI-compatible dictionary).

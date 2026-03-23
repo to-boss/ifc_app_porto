@@ -11,7 +11,7 @@ namespace ifc_ar_core {
     IfcElement create_wall_mesh(float start_x, float start_z, float end_x, float end_z, float height, float thickness);
 
     [Throws=IfcArError]
-    string export_combined_ifc_with_walls(bytes room_data, sequence<FixtureExportInput> fixtures, sequence<WallExportInput> walls);
+    string export_combined_ifc_with_walls(bytes room_data, sequence<FixtureExportInput> fixtures, sequence<WallExportInput> walls, sequence<u64> deleted_element_ids, sequence<ElementMoveInput> moved_elements);
 };
 
 [Error]
@@ -110,6 +110,13 @@ dictionary ModelBounds {
     sequence<float> min_point;
     sequence<float> max_point;
     float diagonal;
+};
+
+dictionary ElementMoveInput {
+    u64 element_id;
+    float offset_x;
+    float offset_y;
+    float offset_z;
 };
 
 dictionary WallExportInput {
