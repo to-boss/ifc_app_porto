@@ -11,6 +11,9 @@ namespace ifc_ar_core {
     IfcElement create_wall_mesh(float start_x, float start_z, float end_x, float end_z, float height, float thickness);
 
     [Throws=IfcArError]
+    FloorPlan extract_floor_plan(bytes data);
+
+    [Throws=IfcArError]
     string export_combined_ifc_with_walls(bytes room_data, sequence<FixtureExportInput> fixtures, sequence<WallExportInput> walls, sequence<u64> deleted_element_ids, sequence<ElementMoveInput> moved_elements);
 };
 
@@ -137,4 +140,22 @@ dictionary FixtureExportInput {
     float rel_y;
     float rel_z;
     float rotation_y;
+};
+
+dictionary FloorPlanEdge {
+    u64 element_id;
+    string ifc_type;
+    string? name;
+    float x1;
+    float z1;
+    float x2;
+    float z2;
+};
+
+dictionary FloorPlan {
+    sequence<FloorPlanEdge> edges;
+    float min_x;
+    float min_z;
+    float max_x;
+    float max_z;
 };

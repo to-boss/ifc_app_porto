@@ -19,6 +19,7 @@
 		AA555555555555555555AAA5 /* Objekt_WC_Beh_.ifc in Resources */ = {isa = PBXBuildFile; fileRef = AA666666666666666666AAA6 /* Objekt_WC_Beh_.ifc */; };
 		D5E417124EE076B89C823EBA /* IFCLoader.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6B151DED304A69F779A5CED0 /* IFCLoader.swift */; };
 		BCF11111111111111111BCF1 /* BCFExporter.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCF22222222222222222BCF2 /* BCFExporter.swift */; };
+		FP111111111111111111FP11 /* FloorPlanView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FP222222222222222222FP22 /* FloorPlanView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -36,6 +37,7 @@
 		AA666666666666666666AAA6 /* Objekt_WC_Beh_.ifc */ = {isa = PBXFileReference; path = "Objekt_WC_Beh_.ifc"; sourceTree = "<group>"; };
 		FECB64B299F294F02C45073E /* ARSessionManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ARSessionManager.swift; sourceTree = "<group>"; };
 		BCF22222222222222222BCF2 /* BCFExporter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BCFExporter.swift; sourceTree = "<group>"; };
+		FP222222222222222222FP22 /* FloorPlanView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FloorPlanView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXGroup section */
@@ -45,6 +47,7 @@
 				698D89F0D3FEAE9B22AA957B /* ARContainerView.swift */,
 				FECB64B299F294F02C45073E /* ARSessionManager.swift */,
 				B81190815F9F9F55951EC9F6 /* FloorGridEntity.swift */,
+				FP222222222222222222FP22 /* FloorPlanView.swift */,
 				6B151DED304A69F779A5CED0 /* IFCLoader.swift */,
 			);
 			path = AR;
@@ -213,6 +216,7 @@
 				BCF11111111111111111BCF1 /* BCFExporter.swift in Sources */,
 				70244BFB856366DC6B44248F /* ContentView.swift in Sources */,
 				BA7DD3F456050B67C42D3DE4 /* FloorGridEntity.swift in Sources */,
+				FP111111111111111111FP11 /* FloorPlanView.swift in Sources */,
 				D5E417124EE076B89C823EBA /* IFCLoader.swift in Sources */,
 				4A2CED66A34A775B3B1450DE /* IFCViewerApp.swift in Sources */,
 				86E2AA8B2910CF90632D02A5 /* ifc_ar_core.swift in Sources */,

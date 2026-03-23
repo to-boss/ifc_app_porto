@@ -88,7 +88,48 @@ struct ContentView: View {
                 // Bottom toolbar
                 HStack {
                     // Primary action (left)
-                    if arManager.state == .heightAdjust {
+                    if arManager.state == .edgeAligning {
+                        HStack(spacing: 12) {
+                            Button(action: { arManager.placeEdgePoint() }) {
+                                Label(
+                                    arManager.edgeAlignPointCount == 0 ? "Place Point 1" : "Place Point 2",
+                                    systemImage: arManager.isSnappedToWallPlane ? "checkmark.circle.fill" : "mappin.and.ellipse"
+                                )
+                                    .font(.subheadline)
+                                    .fontWeight(.semibold)
+                                    .padding(.horizontal, 20)
+                                    .padding(.vertical, 12)
+                                    .background(arManager.isSnappedToWallPlane ? .green : .green.opacity(0.6), in: Capsule())
+                                    .foregroundStyle(.white)
+                            }
+                            Button(action: { arManager.cancelEdgeAlignment() }) {
+                                Label("Cancel", systemImage: "xmark")
+                                    .font(.subheadline)
+                                    .padding(.horizontal, 16)
+                                    .padding(.vertical, 12)
+                                    .background(.ultraThinMaterial, in: Capsule())
+                            }
+                        }
+                    } else if arManager.state == .scaleConfirmation {
+                        HStack(spacing: 12) {
+                            Button(action: { arManager.acceptAutoScale() }) {
+                                Label(String(format: "Auto-Scale (%.2fx)", arManager.computedScaleFactor), systemImage: "arrow.up.left.and.arrow.down.right")
+                                    .font(.subheadline)
+                                    .fontWeight(.semibold)
+                                    .padding(.horizontal, 16)
+                                    .padding(.vertical, 12)
+                                    .background(.green.opacity(0.85), in: Capsule())
+                                    .foregroundStyle(.white)
+                            }
+                            Button(action: { arManager.rejectAutoScale() }) {
+                                Label("Keep 1:1", systemImage: "1.circle")
+                                    .font(.subheadline)
+                                    .padding(.horizontal, 16)
+                                    .padding(.vertical, 12)
+                                    .background(.ultraThinMaterial, in: Capsule())
+                            }
+                        }
+                    } else if arManager.state == .heightAdjust {
                         Button(action: { arManager.confirmHeight() }) {
                             Label("Confirm", systemImage: "checkmark.circle.fill")
                                 .font(.subheadline)
@@ -190,7 +231,7 @@ struct ContentView: View {
 
                     // Secondary actions (right)
                     HStack(spacing: 10) {
-                        if [.floorPlanPicking, .edgeAligning, .heightAdjust, .fixturePreviewing, .roomPlaced, .wallStart, .wallEnd, .wallAdjust, .elementMoving, .done].contains(arManager.state) {
+                        if [.floorPlanPicking, .edgeAligning, .scaleConfirmation, .heightAdjust, .fixturePreviewing, .roomPlaced, .wallStart, .wallEnd, .wallAdjust, .elementMoving, .done].contains(arManager.state) {
                             Button(action: { arManager.reset() }) {
                                 Image(systemName: "arrow.counterclockwise")
                                     .font(.title3)
@@ -299,6 +340,7 @@ struct ContentView: View {
                     floorPlan: plan,
                     selectedEdgeIndex: $arManager.selectedEdgeIndex,
                     arrowAngle: $arManager.edgeArrowAngle,
+                    canvasRotation: $arManager.floorPlanRotation,
                     onConfirm: { arManager.confirmEdgeSelection() }
                 )
                 .transition(.opacity)
@@ -311,7 +353,7 @@ struct ContentView: View {
                     VStack(spacing: 4) {
                         Text(String(format: "%+.0f cm", arManager.floorHeightOffset * 100))
                             .font(.system(size: 11, design: .monospaced))
-                        Slider(value: $arManager.floorHeightOffset, in: -0.5...0.5)
+                        Slider(value: $arManager.floorHeightOffset, in: -3.0...3.0)
                             .frame(width: 150)
                             .rotationEffect(.degrees(-90))
                             .frame(width: 30, height: 150)
@@ -325,6 +367,30 @@ struct ContentView: View {
                     .padding(.trailing, 8)
                 }
                 .frame(maxHeight: .infinity, alignment: .center)
+            }
+
+            // Alignment quality info
+            if arManager.state == .heightAdjust {
+                VStack {
+                    Spacer()
+                    HStack {
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(String(format: "Rotation: %.1f°", arManager.computedRotation * 180 / .pi))
+                                .font(.system(size: 10, design: .monospaced))
+                            if arManager.computedScaleFactor != 1.0 {
+                                Text(String(format: "Scale: %.2fx", arManager.computedScaleFactor))
+                                    .font(.system(size: 10, design: .monospaced))
+                            }
+                            Text(String(format: "Edge: %.2fm (model) / %.2fm (real)", arManager.modelEdgeLength, arManager.realEdgeLength))
+                                .font(.system(size: 10, design: .monospaced))
+                        }
+                        .padding(8)
+                        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 8))
+                        .padding(.leading, 12)
+                        Spacer()
+                    }
+                    .padding(.bottom, 80)
+                }
             }
 
             // Fixture sidebar
@@ -594,7 +660,7 @@ struct ContentView: View {
                 stepLine(done: isStepDone(1))
                 stepDot(step: 2, active: arManager.state == .floorPlanPicking)
                 stepLine(done: isStepDone(2))
-                stepDot(step: 3, active: arManager.state == .edgeAligning)
+                stepDot(step: 3, active: arManager.state == .edgeAligning || arManager.state == .scaleConfirmation)
                 stepLine(done: isStepDone(3))
                 stepDot(step: 4, active: arManager.state == .heightAdjust)
                 stepLine(done: isStepDone(4))
@@ -624,9 +690,13 @@ struct ContentView: View {
         case .floorPlanPicking:
             return "Step 2: Select wall edge"
         case .edgeAligning:
-            return arManager.edgeAlignPointCount == 0 ? "Step 3: Tap first point" : "Step 3: Tap second point"
+            return arManager.edgeAlignPointCount == 0 ? "Step 3: Place point 1" : "Step 3: Place point 2"
+        case .scaleConfirmation:
+            return "Scale mismatch"
+        case .floorSetting:
+            return "Set floor level"
         case .heightAdjust:
-            return "Step 4: Adjust floor height"
+            return "Step 4: Adjust height"
         case .roomPlaced:
             return arManager.loadingError != nil ? "Error" : "Step 5: Add fixtures"
         case .fixtureLoading:
@@ -655,9 +725,18 @@ struct ContentView: View {
         case .floorPlanPicking:
             return "Tap a wall in the floor plan that you can see. Drag the arrow to show which side you're standing on."
         case .edgeAligning:
-            return arManager.edgeAlignPointCount == 0
-                ? "Tap on the floor at one end of the real wall."
-                : "Tap the other end of the same wall."
+            let wallInfo = arManager.detectedWallPlaneCount > 0
+                ? (arManager.isSnappedToWallPlane ? " | Snapped to wall" : " | \(arManager.detectedWallPlaneCount) wall(s) detected")
+                : " | Scan walls for better accuracy"
+            return (arManager.edgeAlignPointCount == 0
+                ? "Aim at one end of the real wall and tap Place."
+                : "Aim at the other end of the same wall and tap Place.") + wallInfo
+        case .scaleConfirmation:
+            return String(format: "Model edge: %.2fm, Real wall: %.2fm (%.0f%% difference). Auto-scale or keep 1:1?",
+                arManager.modelEdgeLength, arManager.realEdgeLength,
+                abs(arManager.computedScaleFactor - 1.0) * 100)
+        case .floorSetting:
+            return "Aim at the floor and tap Set Floor to lock the height."
         case .heightAdjust:
             return "Use the slider to fine-tune the vertical position, then tap Confirm."
         case .roomPlaced:
@@ -711,11 +790,11 @@ struct ContentView: View {
         let laterStates: Set<ARState> = [.roomPlaced, .fixtureLoading, .fixturePreviewing, .wallStart, .wallEnd, .wallAdjust, .elementMoving, .done]
         switch step {
         case 1: // Load
-            return [.floorPlanPicking, .edgeAligning, .heightAdjust].contains(arManager.state) || laterStates.contains(arManager.state)
+            return [.floorPlanPicking, .edgeAligning, .scaleConfirmation, .floorSetting, .heightAdjust].contains(arManager.state) || laterStates.contains(arManager.state)
         case 2: // Pick edge
-            return [.edgeAligning, .heightAdjust].contains(arManager.state) || laterStates.contains(arManager.state)
+            return [.edgeAligning, .scaleConfirmation, .floorSetting, .heightAdjust].contains(arManager.state) || laterStates.contains(arManager.state)
         case 3: // Align
-            return arManager.state == .heightAdjust || laterStates.contains(arManager.state)
+            return [.scaleConfirmation, .floorSetting, .heightAdjust].contains(arManager.state) || laterStates.contains(arManager.state)
         case 4: // Height
             return laterStates.contains(arManager.state)
         case 5: // Fixtures / Done

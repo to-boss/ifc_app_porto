@@ -10,7 +10,9 @@ enum ARState {
     case coaching
     case loading           // loading room IFC + extracting floor plan
     case floorPlanPicking  // 2D floor plan overlay, pick edge + direction
-    case edgeAligning      // tap 2 points on real wall
+    case edgeAligning      // centroid marker follows camera, Place button locks points
+    case scaleConfirmation // auto-scale prompt when model/real lengths differ
+    case floorSetting      // aim at floor, tap Set Floor to lock Y
     case heightAdjust      // vertical slider for floor Y offset
     case roomPlaced        // room placed, show fixture picker
     case fixtureLoading    // loading a fixture IFC
@@ -38,10 +40,15 @@ class ARSessionManager: ObservableObject {
     @Published var floorPlan: FloorPlan?
     @Published var selectedEdgeIndex: Int?
     @Published var edgeArrowAngle: Float = 0  // radians, set via circular dial
+    @Published var floorPlanRotation: Float = 0  // radians, floor plan canvas rotation
     @Published var edgeAlignPointCount: Int = 0
     @Published var floorHeightOffset: Float = 0.0 {
         didSet { applyHeightOffset() }
     }
+    @Published var computedScaleFactor: Float = 1.0
+    @Published var modelEdgeLength: Float = 0
+    @Published var realEdgeLength: Float = 0
+    @Published var computedRotation: Float = 0
     @Published var selectedElement: ElementInfo?
     @Published var selectedScreenPoint: CGPoint = .zero
     @Published var showingDetails: Bool = false
@@ -71,7 +78,18 @@ class ARSessionManager: ObservableObject {
     private var alignmentMarkers: [AnchorEntity] = []
     private var alignmentLine: AnchorEntity?
     private var parsedElements: [ValidatedElement]?
-    private var computedRotation: Float = 0
+    private var modelMinY: Float = 0  // lowest vertex Y (negative when centered)
+    private var edgeAlignMarker: AnchorEntity?
+    private var edgeLiveLineAnchor: AnchorEntity?
+    private var floorMarker: AnchorEntity?
+    private var debugGuideAnchors: [AnchorEntity] = []
+
+    // Wall plane tracking (vertical plane detection)
+    private var detectedWallPlanes: [UUID: ARPlaneAnchor] = [:]
+    @Published var isSnappedToWallPlane: Bool = false
+    @Published var detectedWallPlaneCount: Int = 0
+    private var snappedWallPlaneId: UUID?
+    private var point1WallPlaneId: UUID?
 
     private var roomAnchor: AnchorEntity?
     private var roomEntity: Entity?
@@ -140,12 +158,26 @@ class ARSessionManager: ObservableObject {
     // MARK: - Plane Detection
 
     func handlePlaneAnchorAdded(_ anchor: ARPlaneAnchor) {
-        guard anchor.alignment == .horizontal else { return }
-        handleFloorDetected(anchor)
+        if anchor.alignment == .horizontal {
+            handleFloorDetected(anchor)
+        } else if anchor.alignment == .vertical {
+            detectedWallPlanes[anchor.identifier] = anchor
+            detectedWallPlaneCount = detectedWallPlanes.count
+            log("Wall plane detected (\(detectedWallPlanes.count) total)")
+        }
     }
 
     func handlePlaneAnchorUpdated(_ anchor: ARPlaneAnchor) {
-        // Floor height will be set precisely from alignment taps
+        if anchor.alignment == .vertical {
+            detectedWallPlanes[anchor.identifier] = anchor
+        }
+    }
+
+    func handlePlaneAnchorRemoved(_ anchor: ARPlaneAnchor) {
+        if anchor.alignment == .vertical {
+            detectedWallPlanes.removeValue(forKey: anchor.identifier)
+            detectedWallPlaneCount = detectedWallPlanes.count
+        }
     }
 
     // MARK: - Floor
@@ -176,10 +208,7 @@ class ARSessionManager: ObservableObject {
     func handleTap(at point: CGPoint) {
         guard let arView = arView else { return }
 
-        if state == .edgeAligning {
-            handleEdgeAlignmentTap(at: point)
-            return
-        }
+        // edgeAligning uses centroid + Place button, not taps
 
         // Entity tap detection when models are placed
         if state == .roomPlaced || state == .done {
@@ -294,12 +323,21 @@ class ARSessionManager: ObservableObject {
                 }
                 let plan = try extractFloorPlan(data: ifcData)
 
+                // Compute model floor level (minimum Y across all vertices)
+                var minY: Float = .infinity
+                for elem in elements {
+                    for i in stride(from: 1, to: elem.positions.count, by: 3) {
+                        minY = min(minY, elem.positions[i])
+                    }
+                }
+
                 await MainActor.run {
                     self.parsedElements = elements
+                    self.modelMinY = minY == .infinity ? 0 : minY
                     self.floorPlan = plan
                     self.selectedEdgeIndex = nil
                     self.edgeArrowAngle = 0
-                    self.log("Floor plan: \(plan.edges.count) edges")
+                    self.log(String(format: "Floor plan: %d edges, model floor Y: %.2fm", plan.edges.count, self.modelMinY))
                     self.state = .floorPlanPicking
                 }
             } catch {
@@ -312,45 +350,100 @@ class ARSessionManager: ObservableObject {
     }
 
     func confirmEdgeSelection() {
-        guard state == .floorPlanPicking, selectedEdgeIndex != nil else { return }
+        guard let arView = arView, state == .floorPlanPicking, selectedEdgeIndex != nil else { return }
         edgeAlignPoints.removeAll()
         edgeAlignPointCount = 0
+        snappedWallPlaneId = nil
+        point1WallPlaneId = nil
+        isSnappedToWallPlane = false
+
+        // Create centroid marker (same pattern as wall building)
+        var material = UnlitMaterial()
+        material.color = .init(tint: .cyan)
+        let disc = MeshResource.generateCylinder(height: 0.005, radius: 0.04)
+        let discEntity = ModelEntity(mesh: disc, materials: [material])
+        let sphere = MeshResource.generateSphere(radius: 0.02)
+        let sphereEntity = ModelEntity(mesh: sphere, materials: [material])
+        sphereEntity.position.y = 0.025
+        let marker = AnchorEntity(world: .zero)
+        marker.addChild(discEntity)
+        marker.addChild(sphereEntity)
+        arView.scene.addAnchor(marker)
+        edgeAlignMarker = marker
+
         state = .edgeAligning
-        log("Edge confirmed — tap 2 points on the real wall")
+        log("Edge confirmed — aim at wall endpoint and tap Place")
     }
 
-    private func handleEdgeAlignmentTap(at point: CGPoint) {
-        guard let arView = arView else { return }
+    /// Called by toolbar "Place" button during edge alignment.
+    func placeEdgePoint() {
+        guard state == .edgeAligning, let marker = edgeAlignMarker else { return }
+        let pos = marker.position
 
-        let results = arView.raycast(from: point, allowing: .existingPlaneGeometry, alignment: .horizontal)
-        guard let result = results.first else { return }
-
-        let worldPos = SIMD3<Float>(
-            result.worldTransform.columns.3.x,
-            result.worldTransform.columns.3.y,
-            result.worldTransform.columns.3.z
-        )
-
-        edgeAlignPoints.append(worldPos)
-        placeAlignmentMarker(at: worldPos)
+        edgeAlignPoints.append(pos)
+        placeAlignmentMarker(at: pos)
         edgeAlignPointCount = edgeAlignPoints.count
 
-        if edgeAlignPoints.count == 2 {
+        if edgeAlignPoints.count == 1 {
+            // Track which wall plane point 1 snapped to
+            point1WallPlaneId = snappedWallPlaneId
+            // Create live line from point 1 to centroid
+            if let arView = arView {
+                let lineAnchor = AnchorEntity(world: pos)
+                let mesh = MeshResource.generateBox(width: 0.003, height: 0.003, depth: 0.003)
+                var mat = UnlitMaterial()
+                mat.color = .init(tint: .cyan)
+                let lineEntity = ModelEntity(mesh: mesh, materials: [mat])
+                lineEntity.name = "liveLine"
+                lineAnchor.addChild(lineEntity)
+                arView.scene.addAnchor(lineAnchor)
+                edgeLiveLineAnchor = lineAnchor
+            }
+            log("Point 1 locked — aim at the other end")
+        } else if edgeAlignPoints.count == 2 {
+            // Remove live line
+            if let line = edgeLiveLineAnchor {
+                arView?.scene.removeAnchor(line)
+                edgeLiveLineAnchor = nil
+            }
             drawAlignmentLine(from: edgeAlignPoints[0], to: edgeAlignPoints[1])
-            computeAndPlaceModel()
+
+            // Remove centroid marker
+            arView?.scene.removeAnchor(marker)
+            edgeAlignMarker = nil
+
+            computeAlignmentAndPlace()
         }
     }
 
-    private func computeAndPlaceModel() {
+    func cancelEdgeAlignment() {
+        if let marker = edgeAlignMarker {
+            arView?.scene.removeAnchor(marker)
+            edgeAlignMarker = nil
+        }
+        clearAlignmentVisuals()
+        state = .floorPlanPicking
+        log("Edge alignment cancelled")
+    }
+
+    private func computeAlignmentAndPlace() {
         guard let idx = selectedEdgeIndex,
               let plan = floorPlan,
               idx < plan.edges.count,
-              edgeAlignPoints.count == 2,
-              let elements = parsedElements else { return }
+              edgeAlignPoints.count == 2 else { return }
 
         let edge = plan.edges[idx]
         let r1 = edgeAlignPoints[0]
         let r2 = edgeAlignPoints[1]
+
+        // Compute scale factor
+        let realLen = sqrt((r2.x - r1.x) * (r2.x - r1.x) + (r2.z - r1.z) * (r2.z - r1.z))
+        let modelLen = sqrt((edge.x2 - edge.x1) * (edge.x2 - edge.x1) + (edge.z2 - edge.z1) * (edge.z2 - edge.z1))
+        let scale = modelLen > 0.01 ? realLen / modelLen : 1.0
+
+        modelEdgeLength = modelLen
+        realEdgeLength = realLen
+        computedScaleFactor = scale
 
         // Model edge direction (XZ plane)
         let mDx = edge.x2 - edge.x1
@@ -360,61 +453,112 @@ class ARSessionManager: ObservableObject {
         // Real-world edge direction (XZ plane)
         let rDx = r2.x - r1.x
         let rDz = r2.z - r1.z
-        let rAngle = atan2(rDz, rDx)
+        var rAngle = atan2(rDz, rDx)
 
-        // The arrow angle is in screen space of the floor plan view.
-        // The default perpendicular is mAngle + pi/2.
-        // The user's arrow offset from perpendicular tells us which side they're on.
-        // We need: rotation so that model edge aligns with real edge,
-        // and the arrow side faces the user.
+        // Refine rotation using wall plane normal if both points snapped to the same wall
+        if let planeId = point1WallPlaneId,
+           planeId == snappedWallPlaneId,
+           let plane = detectedWallPlanes[planeId] {
+            let planeDir = wallPlaneDirection(plane)
+            // Choose direction (planeDir or planeDir+pi) closest to user's tapped direction
+            let diff = atan2(sin(planeDir - rAngle), cos(planeDir - rAngle))
+            if abs(diff) <= Float.pi / 2 {
+                rAngle = planeDir
+            } else {
+                rAngle = planeDir + .pi
+            }
+            log(String(format: "ALIGN: rotation refined by wall plane (%.1f°)", rAngle * 180 / .pi))
+        }
+
+        // Rotation: simd_quatf(angle:θ, axis:Y) maps direction α to α-θ
+        // So to map mAngle to rAngle: mAngle - θ = rAngle → θ = mAngle - rAngle
+        var rotation = mAngle - rAngle
+
+        // Arrow offset from perpendicular determines which side user is on
         let perpAngle = mAngle + .pi / 2
-        let arrowOffset = edgeArrowAngle - perpAngle  // how much user rotated from default perp
-
-        // Base rotation: align model edge to real edge
-        var rotation = rAngle - mAngle
-
-        // If arrow is flipped (offset > pi/2 or < -pi/2), add pi
+        let arrowOffset = edgeArrowAngle - perpAngle
         let normalizedOffset = atan2(sin(arrowOffset), cos(arrowOffset))
         if abs(normalizedOffset) > .pi / 2 {
             rotation += .pi
         }
-
         computedRotation = rotation
 
-        // Rotate model edge midpoint
-        let mMidX = (edge.x1 + edge.x2) / 2
-        let mMidZ = (edge.z1 + edge.z2) / 2
+        log(String(format: "Edge: %.2fm model, %.2fm real, scale %.2fx, rot %.1f°", modelLen, realLen, scale, rotation * 180 / .pi))
+
+        // If scale differs by more than 10%, ask user to confirm
+        if abs(scale - 1.0) > 0.10 {
+            state = .scaleConfirmation
+            return
+        }
+
+        // Always apply computed scale (even small corrections matter)
+        placeModelWithScale(scaleFactor: scale)
+    }
+
+    func acceptAutoScale() {
+        guard state == .scaleConfirmation else { return }
+        placeModelWithScale(scaleFactor: computedScaleFactor)
+    }
+
+    func rejectAutoScale() {
+        guard state == .scaleConfirmation else { return }
+        placeModelWithScale(scaleFactor: 1.0)
+    }
+
+    private func placeModelWithScale(scaleFactor: Float) {
+        guard let idx = selectedEdgeIndex,
+              let plan = floorPlan,
+              idx < plan.edges.count,
+              edgeAlignPoints.count == 2,
+              let elements = parsedElements else { return }
+
+        let edge = plan.edges[idx]
+        let r1 = edgeAlignPoints[0]
+        let r2 = edgeAlignPoints[1]
+        let rotation = computedRotation
+
+        // Rotate model edge midpoint (scaled) using Y-axis rotation matrix:
+        // x' = x·cos(θ) + z·sin(θ),  z' = -x·sin(θ) + z·cos(θ)
+        let mMidX = (edge.x1 + edge.x2) / 2 * scaleFactor
+        let mMidZ = (edge.z1 + edge.z2) / 2 * scaleFactor
         let cosR = cos(rotation)
         let sinR = sin(rotation)
-        let rotatedMidX = mMidX * cosR - mMidZ * sinR
-        let rotatedMidZ = mMidX * sinR + mMidZ * cosR
+        let rotatedMidX = mMidX * cosR + mMidZ * sinR
+        let rotatedMidZ = -mMidX * sinR + mMidZ * cosR
 
         // Real edge midpoint
         let rMidX = (r1.x + r2.x) / 2
         let rMidZ = (r1.z + r2.z) / 2
         let rMidY = (r1.y + r2.y) / 2
 
-        // Translation
         let tx = rMidX - rotatedMidX
         let tz = rMidZ - rotatedMidZ
 
-        // Build and place model
         do {
             let (entity, metadata) = try IFCLoader.buildEntities(from: elements)
             elementMetadata.merge(metadata) { _, new in new }
 
+            entity.scale = SIMD3<Float>(repeating: scaleFactor)
             entity.orientation = simd_quatf(angle: rotation, axis: SIMD3(0, 1, 0))
 
-            let anchor = AnchorEntity(world: SIMD3<Float>(tx, rMidY, tz))
+            // Offset Y so model floor (modelMinY) sits at real floor level (rMidY)
+            let anchorY = rMidY - modelMinY * scaleFactor
+            let anchor = AnchorEntity(world: SIMD3<Float>(tx, anchorY, tz))
             anchor.addChild(entity)
             arView?.scene.addAnchor(anchor)
 
             roomAnchor = anchor
             roomEntity = entity
             floorHeightOffset = 0
+            computedScaleFactor = scaleFactor
 
-            log("Model placed via edge alignment (rotation: \(String(format: "%.1f", rotation * 180 / .pi))°)")
-            clearAlignmentVisuals()
+            log(String(format: "Model placed (rotation: %.1f°, scale: %.2fx)", rotation * 180 / .pi, scaleFactor))
+            drawDebugGuides(edge: edge, scaleFactor: scaleFactor, rotation: rotation, tx: tx, tz: tz, rMidY: rMidY)
+
+            // Store base Y for height fine-tuning
+            floorBaseY = anchorY
+            floorHeightOffset = 0
+
             state = .heightAdjust
         } catch {
             log("FAILED to build entities: \(error)")
@@ -422,19 +566,100 @@ class ARSessionManager: ObservableObject {
         }
     }
 
+    private func drawDebugGuides(edge: FloorPlanEdge, scaleFactor: Float, rotation: Float, tx: Float, tz: Float, rMidY: Float) {
+        guard let arView = arView else { return }
+        let cosR = cos(rotation)
+        let sinR = sin(rotation)
+
+        // Transform model edge endpoints to world space
+        let e1x = edge.x1 * scaleFactor
+        let e1z = edge.z1 * scaleFactor
+        let e2x = edge.x2 * scaleFactor
+        let e2z = edge.z2 * scaleFactor
+
+        let w1x = e1x * cosR + e1z * sinR + tx
+        let w1z = -e1x * sinR + e1z * cosR + tz
+        let w2x = e2x * cosR + e2z * sinR + tx
+        let w2z = -e2x * sinR + e2z * cosR + tz
+
+        let p1 = SIMD3<Float>(w1x, rMidY + 0.01, w1z)
+        let p2 = SIMD3<Float>(w2x, rMidY + 0.01, w2z)
+
+        // Green line for model edge in world space
+        let dx = p2.x - p1.x
+        let dz = p2.z - p1.z
+        let length = sqrt(dx * dx + dz * dz)
+        let angle = atan2(dz, dx)
+        let mid = (p1 + p2) / 2
+
+        var greenMat = UnlitMaterial()
+        greenMat.color = .init(tint: .green)
+        let lineMesh = MeshResource.generateBox(width: max(length, 0.01), height: 0.006, depth: 0.012)
+        let lineEntity = ModelEntity(mesh: lineMesh, materials: [greenMat])
+        lineEntity.orientation = simd_quatf(angle: -angle, axis: SIMD3(0, 1, 0))
+
+        let lineAnchor = AnchorEntity(world: mid)
+        lineAnchor.addChild(lineEntity)
+        arView.scene.addAnchor(lineAnchor)
+        debugGuideAnchors.append(lineAnchor)
+
+        // Green dots at model edge endpoints
+        let dotMesh = MeshResource.generateSphere(radius: 0.025)
+        for pt in [p1, p2] {
+            let dot = ModelEntity(mesh: dotMesh, materials: [greenMat])
+            let dotAnchor = AnchorEntity(world: pt)
+            dotAnchor.addChild(dot)
+            arView.scene.addAnchor(dotAnchor)
+            debugGuideAnchors.append(dotAnchor)
+        }
+
+        // Red dot at model origin (anchor point)
+        var redMat = UnlitMaterial()
+        redMat.color = .init(tint: .red)
+        let originDot = ModelEntity(mesh: MeshResource.generateSphere(radius: 0.03), materials: [redMat])
+        let originAnchor = AnchorEntity(world: SIMD3<Float>(tx, rMidY + 0.02, tz))
+        originAnchor.addChild(originDot)
+        arView.scene.addAnchor(originAnchor)
+        debugGuideAnchors.append(originAnchor)
+
+        log(String(format: "Debug: model edge world (%.2f,%.2f)→(%.2f,%.2f), anchor (%.2f,%.2f)", w1x, w1z, w2x, w2z, tx, tz))
+    }
+
+    private func clearDebugGuides() {
+        for anchor in debugGuideAnchors {
+            arView?.scene.removeAnchor(anchor)
+        }
+        debugGuideAnchors.removeAll()
+    }
+
+    private var floorBaseY: Float = 0  // anchor Y before height offset
+
+    /// User aims at floor and taps "Set Floor" — lock the Y.
+    func setFloorPoint() {
+        guard state == .floorSetting, let marker = floorMarker, let anchor = roomAnchor else { return }
+
+        let floorY = marker.position.y
+        floorBaseY = floorY - modelMinY * computedScaleFactor
+        anchor.position.y = floorBaseY
+        floorHeightOffset = 0
+
+        // Remove floor marker
+        arView?.scene.removeAnchor(marker)
+        floorMarker = nil
+
+        log(String(format: "Floor set at Y=%.3f", floorY))
+        clearDebugGuides()
+        state = .heightAdjust
+    }
+
     private func applyHeightOffset() {
-        guard let anchor = roomAnchor, edgeAlignPoints.count == 2 else { return }
-        let baseY = (edgeAlignPoints[0].y + edgeAlignPoints[1].y) / 2
-        anchor.position.y = baseY + floorHeightOffset
+        guard let anchor = roomAnchor else { return }
+        anchor.position.y = floorBaseY + floorHeightOffset
     }
 
     func confirmHeight() {
         guard state == .heightAdjust else { return }
-        // Apply final height
-        if let anchor = roomAnchor, edgeAlignPoints.count == 2 {
-            let baseY = (edgeAlignPoints[0].y + edgeAlignPoints[1].y) / 2
-            anchor.position.y = baseY + floorHeightOffset
-        }
+        applyHeightOffset()
         log("Height confirmed (offset: \(String(format: "%+.1f", floorHeightOffset * 100)) cm)")
         state = .roomPlaced
     }
@@ -489,6 +714,70 @@ class ARSessionManager: ObservableObject {
         anchor.addChild(lineEntity)
         arView.scene.addAnchor(anchor)
         alignmentLine = anchor
+    }
+
+    // MARK: - Wall Plane Snapping
+
+    /// Find the nearest detected vertical plane within threshold distance.
+    /// Returns the plane and the point projected onto its surface.
+    private func findNearestWallPlane(to worldPos: SIMD3<Float>, threshold: Float = 0.15) -> (ARPlaneAnchor, SIMD3<Float>)? {
+        var bestAnchor: ARPlaneAnchor?
+        var bestSnappedPos: SIMD3<Float>?
+        var bestDist: Float = threshold
+
+        for (_, plane) in detectedWallPlanes {
+            // Plane normal from transform column 2 (local Z-axis)
+            let col2 = plane.transform.columns.2
+            let normal = SIMD3<Float>(col2.x, col2.y, col2.z)
+            let col3 = plane.transform.columns.3
+            let planeCenter = SIMD3<Float>(col3.x, col3.y, col3.z)
+
+            // Signed distance from point to plane
+            let diff = worldPos - planeCenter
+            let signedDist = simd_dot(diff, normal)
+            let absDist = abs(signedDist)
+
+            if absDist < bestDist {
+                // Project point onto plane surface
+                let snapped = worldPos - signedDist * normal
+
+                // Check snapped point is roughly within plane extent (in plane-local coords)
+                let invTransform = simd_inverse(plane.transform)
+                let localPos = invTransform * SIMD4<Float>(snapped.x, snapped.y, snapped.z, 1.0)
+                let planeExtent = plane.planeExtent
+                let halfW = planeExtent.width / 2 + 0.1  // small margin
+                let halfH = planeExtent.height / 2 + 0.1
+                if abs(localPos.x) <= halfW && abs(localPos.z) <= halfH {
+                    bestDist = absDist
+                    bestAnchor = plane
+                    bestSnappedPos = snapped
+                }
+            }
+        }
+
+        if let anchor = bestAnchor, let pos = bestSnappedPos {
+            return (anchor, pos)
+        }
+        return nil
+    }
+
+    /// Get the wall direction (along the wall surface in XZ) from a vertical plane's normal.
+    private func wallPlaneDirection(_ plane: ARPlaneAnchor) -> Float {
+        let col2 = plane.transform.columns.2
+        // Wall runs perpendicular to normal in XZ plane: (-nz, nx)
+        return atan2(col2.x, -col2.z)
+    }
+
+    /// Update the centroid marker material color based on snap state.
+    private func updateMarkerColor(snapped: Bool) {
+        guard let marker = edgeAlignMarker else { return }
+        var material = UnlitMaterial()
+        material.color = .init(tint: snapped ? .green : .cyan)
+        for child in marker.children {
+            if let model = child as? ModelEntity {
+                model.model?.materials = [material]
+            }
+        }
     }
 
     private func clearAlignmentVisuals() {
@@ -599,6 +888,61 @@ class ARSessionManager: ObservableObject {
                 let worldPos = SIMD3<Float>(col.x, col.y, col.z)
                 let localPos = roomEnt.convert(position: worldPos, from: nil)
                 entity.position = localPos
+            }
+        }
+
+        // Edge alignment: move centroid marker + update live line
+        if state == .edgeAligning {
+            let results = arView.raycast(from: aimPoint, allowing: .existingPlaneGeometry, alignment: .horizontal)
+            if let result = results.first {
+                let col = result.worldTransform.columns.3
+                var markerPos = SIMD3<Float>(col.x, col.y, col.z)
+
+                // Try to snap X/Z to nearest vertical wall plane
+                if let (wallPlane, snappedPos) = findNearestWallPlane(to: markerPos) {
+                    markerPos.x = snappedPos.x
+                    markerPos.z = snappedPos.z
+                    if snappedWallPlaneId != wallPlane.identifier {
+                        snappedWallPlaneId = wallPlane.identifier
+                        updateMarkerColor(snapped: true)
+                    }
+                    if !isSnappedToWallPlane { isSnappedToWallPlane = true }
+                } else {
+                    if isSnappedToWallPlane {
+                        snappedWallPlaneId = nil
+                        isSnappedToWallPlane = false
+                        updateMarkerColor(snapped: false)
+                    }
+                }
+
+                edgeAlignMarker?.position = markerPos
+
+                // Update live line from point 1 to current marker
+                if edgeAlignPoints.count == 1, let lineAnchor = edgeLiveLineAnchor {
+                    let p1 = edgeAlignPoints[0]
+                    let dx = markerPos.x - p1.x
+                    let dz = markerPos.z - p1.z
+                    let length = sqrt(dx * dx + dz * dz)
+                    let angle = atan2(dz, dx)
+                    let mid = SIMD3<Float>((p1.x + markerPos.x) / 2, (p1.y + markerPos.y) / 2 + 0.001, (p1.z + markerPos.z) / 2)
+                    lineAnchor.position = mid
+                    if let lineEntity = lineAnchor.children.first as? ModelEntity, length > 0.01 {
+                        lineEntity.model = ModelComponent(
+                            mesh: MeshResource.generateBox(width: max(length, 0.01), height: 0.003, depth: 0.008),
+                            materials: lineEntity.model?.materials ?? []
+                        )
+                        lineEntity.orientation = simd_quatf(angle: -angle, axis: SIMD3(0, 1, 0))
+                    }
+                }
+            }
+        }
+
+        // Floor setting: move yellow marker to camera aim point
+        if state == .floorSetting {
+            let results = arView.raycast(from: aimPoint, allowing: .existingPlaneGeometry, alignment: .horizontal)
+            if let result = results.first {
+                let col = result.worldTransform.columns.3
+                floorMarker?.position = SIMD3<Float>(col.x, col.y, col.z)
             }
         }
 
@@ -1195,10 +1539,29 @@ class ARSessionManager: ObservableObject {
         floorPlan = nil
         selectedEdgeIndex = nil
         edgeArrowAngle = 0
+        floorPlanRotation = 0
         edgeAlignPointCount = 0
         floorHeightOffset = 0
         parsedElements = nil
+        modelMinY = 0
         computedRotation = 0
+        computedScaleFactor = 1.0
+        modelEdgeLength = 0
+        realEdgeLength = 0
+        if let marker = edgeAlignMarker {
+            arView?.scene.removeAnchor(marker)
+            edgeAlignMarker = nil
+        }
+        if let line = edgeLiveLineAnchor {
+            arView?.scene.removeAnchor(line)
+            edgeLiveLineAnchor = nil
+        }
+        if let marker = floorMarker {
+            arView?.scene.removeAnchor(marker)
+            floorMarker = nil
+        }
+        floorBaseY = 0
+        clearDebugGuides()
 
         state = .coaching
     }

@@ -1,5 +1,6 @@
 pub mod color;
 pub mod error;
+pub mod floor_plan;
 pub mod geometry;
 pub mod gltf_export;
 pub mod ifc_export;
@@ -10,6 +11,7 @@ pub mod types;
 pub mod wall;
 
 use error::IfcArError;
+use floor_plan::{FloorPlan, FloorPlanEdge};
 use types::{
     ElementColor, IfcClassificationInfo, IfcElement, IfcMaterialInfo, IfcMaterialLayer, IfcModel,
     IfcProperty, IfcQuantity, IfcTypeInfo, MeshData, ModelBounds, SpatialNode, SpatialTree,
@@ -84,6 +86,13 @@ pub fn create_wall_mesh(
     thickness: f32,
 ) -> IfcElement {
     wall::create_wall_mesh(start_x, start_z, end_x, end_z, height, thickness)
+}
+
+/// Extract 2D floor plan edges from an IFC file.
+///
+/// Returns wall edges projected onto the XZ plane for AR alignment UI.
+pub fn extract_floor_plan(data: Vec<u8>) -> Result<FloorPlan, IfcArError> {
+    floor_plan::extract_floor_plan(&data)
 }
 
 /// Export combined IFC with room, fixtures, and user-created walls.

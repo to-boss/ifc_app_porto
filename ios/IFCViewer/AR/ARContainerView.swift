@@ -9,7 +9,7 @@ struct ARContainerView: UIViewRepresentable {
         let arView = ARView(frame: .zero)
 
         let config = ARWorldTrackingConfiguration()
-        config.planeDetection = [.horizontal]
+        config.planeDetection = [.horizontal, .vertical]
         config.environmentTexturing = .automatic
         arView.session.run(config)
 
@@ -36,13 +36,6 @@ struct ARContainerView: UIViewRepresentable {
             action: #selector(Coordinator.handleTap(_:))
         )
         arView.addGestureRecognizer(tapGesture)
-
-        // Rotation gesture for manual grid alignment (during calibration)
-        let rotationGesture = UIRotationGestureRecognizer(
-            target: context.coordinator,
-            action: #selector(Coordinator.handleRotation(_:))
-        )
-        arView.addGestureRecognizer(rotationGesture)
 
         Task { @MainActor in
             arManager.arView = arView
@@ -92,6 +85,15 @@ struct ARContainerView: UIViewRepresentable {
             }
         }
 
+        func session(_ session: ARSession, didRemove anchors: [ARAnchor]) {
+            for anchor in anchors {
+                guard let planeAnchor = anchor as? ARPlaneAnchor else { continue }
+                Task { @MainActor in
+                    arManager.handlePlaneAnchorRemoved(planeAnchor)
+                }
+            }
+        }
+
         // MARK: - Frame Updates
 
         func session(_ session: ARSession, didUpdate frame: ARFrame) {
@@ -108,12 +110,5 @@ struct ARContainerView: UIViewRepresentable {
             }
         }
 
-        @objc func handleRotation(_ recognizer: UIRotationGestureRecognizer) {
-            let delta = Float(recognizer.rotation)
-            recognizer.rotation = 0
-            Task { @MainActor in
-                arManager.adjustRotation(by: -delta)
-            }
-        }
     }
 }
