@@ -8,10 +8,10 @@ private let logger = Logger(subsystem: "com.ifcar.viewer", category: "ARSession"
 
 enum ARState {
     case coaching
-    case aligning
-    case calibrating
-    case loading           // loading room IFC
-    case previewing        // ghost preview of room
+    case loading           // loading room IFC + extracting floor plan
+    case floorPlanPicking  // 2D floor plan overlay, pick edge + direction
+    case edgeAligning      // tap 2 points on real wall
+    case heightAdjust      // vertical slider for floor Y offset
     case roomPlaced        // room placed, show fixture picker
     case fixtureLoading    // loading a fixture IFC
     case fixturePreviewing // ghost preview of fixture
@@ -25,8 +25,6 @@ enum ARState {
 @MainActor
 class ARSessionManager: ObservableObject {
     @Published var state: ARState = .coaching
-    @Published var gridRotation: Float = 0
-    @Published var alignmentPointCount: Int = 0
     @Published var loadingError: String?
     @Published var debugLog: [String] = []
     @Published var modelScale: Float = 1.0 {
@@ -34,6 +32,15 @@ class ARSessionManager: ObservableObject {
     }
     @Published var modelRotation: Float = 0 {
         didSet { applyPreviewTransform() }
+    }
+
+    // Edge-based alignment
+    @Published var floorPlan: FloorPlan?
+    @Published var selectedEdgeIndex: Int?
+    @Published var edgeArrowAngle: Float = 0  // radians, set via circular dial
+    @Published var edgeAlignPointCount: Int = 0
+    @Published var floorHeightOffset: Float = 0.0 {
+        didSet { applyHeightOffset() }
     }
     @Published var selectedElement: ElementInfo?
     @Published var selectedScreenPoint: CGPoint = .zero
@@ -59,10 +66,12 @@ class ARSessionManager: ObservableObject {
     private var floorAnchor: AnchorEntity?
     private var gridEntity: FloorGridEntity?
 
-    // Alignment
-    private var alignmentPoints: [SIMD3<Float>] = []
+    // Edge alignment
+    private var edgeAlignPoints: [SIMD3<Float>] = []
     private var alignmentMarkers: [AnchorEntity] = []
     private var alignmentLine: AnchorEntity?
+    private var parsedElements: [ValidatedElement]?
+    private var computedRotation: Float = 0
 
     private var roomAnchor: AnchorEntity?
     private var roomEntity: Entity?
@@ -90,6 +99,15 @@ class ARSessionManager: ObservableObject {
     private var deletedElementIds: Set<UInt64> = []
     private var movedElementOffsets: [UInt64: SIMD3<Float>] = [:]
 
+    // Hidden elements
+    struct HiddenElement: Identifiable {
+        let id: UInt64
+        let name: String
+        let ifcType: String
+        let entity: Entity
+    }
+    @Published var hiddenElements: [HiddenElement] = []
+
     // Wall building
     private var wallStartPoint: SIMD3<Float>?
     private var wallEndPoint: SIMD3<Float>?
@@ -114,7 +132,8 @@ class ARSessionManager: ObservableObject {
 
     func coachingDidFinish() {
         if state == .coaching {
-            state = .aligning
+            state = .loading
+            loadAndExtractFloorPlan()
         }
     }
 
@@ -145,8 +164,10 @@ class ARSessionManager: ObservableObject {
         floorAnchor = anchorEntity
         gridEntity = grid
 
-        if state == .coaching || state == .aligning {
-            state = .aligning
+        // Floor detected — coaching overlay can dismiss now
+        if state == .coaching {
+            state = .loading
+            loadAndExtractFloorPlan()
         }
     }
 
@@ -155,8 +176,8 @@ class ARSessionManager: ObservableObject {
     func handleTap(at point: CGPoint) {
         guard let arView = arView else { return }
 
-        if state == .aligning {
-            handleAlignmentTap(at: point)
+        if state == .edgeAligning {
+            handleEdgeAlignmentTap(at: point)
             return
         }
 
@@ -253,9 +274,52 @@ class ARSessionManager: ObservableObject {
         return nil
     }
 
-    // MARK: - 2-Point Wall Alignment
+    // MARK: - Edge-Based Alignment
 
-    private func handleAlignmentTap(at point: CGPoint) {
+    private func loadAndExtractFloorPlan() {
+        guard state == .loading else { return }
+        loadingError = nil
+        log("Loading room + extracting floor plan...")
+        IFCLoader.onLog = { [weak self] msg in self?.log(msg) }
+
+        Task.detached {
+            do {
+                // Parse IFC
+                let elements = try await IFCLoader.parseAndValidate(named: "BaseRoom-v2")
+
+                // Extract floor plan
+                guard let url = Bundle.main.url(forResource: "BaseRoom-v2", withExtension: "ifc"),
+                      let ifcData = try? Data(contentsOf: url) else {
+                    throw IFCLoaderError.bundleFileNotFound("BaseRoom-v2")
+                }
+                let plan = try extractFloorPlan(data: ifcData)
+
+                await MainActor.run {
+                    self.parsedElements = elements
+                    self.floorPlan = plan
+                    self.selectedEdgeIndex = nil
+                    self.edgeArrowAngle = 0
+                    self.log("Floor plan: \(plan.edges.count) edges")
+                    self.state = .floorPlanPicking
+                }
+            } catch {
+                await MainActor.run {
+                    self.log("FAILED: \(error)")
+                    self.loadingError = "\(error)"
+                }
+            }
+        }
+    }
+
+    func confirmEdgeSelection() {
+        guard state == .floorPlanPicking, selectedEdgeIndex != nil else { return }
+        edgeAlignPoints.removeAll()
+        edgeAlignPointCount = 0
+        state = .edgeAligning
+        log("Edge confirmed — tap 2 points on the real wall")
+    }
+
+    private func handleEdgeAlignmentTap(at point: CGPoint) {
         guard let arView = arView else { return }
 
         let results = arView.raycast(from: point, allowing: .existingPlaneGeometry, alignment: .horizontal)
@@ -267,29 +331,112 @@ class ARSessionManager: ObservableObject {
             result.worldTransform.columns.3.z
         )
 
-        alignmentPoints.append(worldPos)
+        edgeAlignPoints.append(worldPos)
         placeAlignmentMarker(at: worldPos)
-        alignmentPointCount = alignmentPoints.count
+        edgeAlignPointCount = edgeAlignPoints.count
 
-        if alignmentPoints.count == 2 {
-            let p1 = alignmentPoints[0]
-            let p2 = alignmentPoints[1]
-
-            // Draw line between points
-            drawAlignmentLine(from: p1, to: p2)
-
-            // Compute grid rotation from the line direction
-            let dx = p2.x - p1.x
-            let dz = p2.z - p1.z
-            gridRotation = atan2(dz, dx)
-            updateGridRotation()
-
-            // Set floor height from the average of the two tapped points
-            let floorY = (p1.y + p2.y) / 2
-            floorAnchor?.position.y = floorY
-
-            state = .calibrating
+        if edgeAlignPoints.count == 2 {
+            drawAlignmentLine(from: edgeAlignPoints[0], to: edgeAlignPoints[1])
+            computeAndPlaceModel()
         }
+    }
+
+    private func computeAndPlaceModel() {
+        guard let idx = selectedEdgeIndex,
+              let plan = floorPlan,
+              idx < plan.edges.count,
+              edgeAlignPoints.count == 2,
+              let elements = parsedElements else { return }
+
+        let edge = plan.edges[idx]
+        let r1 = edgeAlignPoints[0]
+        let r2 = edgeAlignPoints[1]
+
+        // Model edge direction (XZ plane)
+        let mDx = edge.x2 - edge.x1
+        let mDz = edge.z2 - edge.z1
+        let mAngle = atan2(mDz, mDx)
+
+        // Real-world edge direction (XZ plane)
+        let rDx = r2.x - r1.x
+        let rDz = r2.z - r1.z
+        let rAngle = atan2(rDz, rDx)
+
+        // The arrow angle is in screen space of the floor plan view.
+        // The default perpendicular is mAngle + pi/2.
+        // The user's arrow offset from perpendicular tells us which side they're on.
+        // We need: rotation so that model edge aligns with real edge,
+        // and the arrow side faces the user.
+        let perpAngle = mAngle + .pi / 2
+        let arrowOffset = edgeArrowAngle - perpAngle  // how much user rotated from default perp
+
+        // Base rotation: align model edge to real edge
+        var rotation = rAngle - mAngle
+
+        // If arrow is flipped (offset > pi/2 or < -pi/2), add pi
+        let normalizedOffset = atan2(sin(arrowOffset), cos(arrowOffset))
+        if abs(normalizedOffset) > .pi / 2 {
+            rotation += .pi
+        }
+
+        computedRotation = rotation
+
+        // Rotate model edge midpoint
+        let mMidX = (edge.x1 + edge.x2) / 2
+        let mMidZ = (edge.z1 + edge.z2) / 2
+        let cosR = cos(rotation)
+        let sinR = sin(rotation)
+        let rotatedMidX = mMidX * cosR - mMidZ * sinR
+        let rotatedMidZ = mMidX * sinR + mMidZ * cosR
+
+        // Real edge midpoint
+        let rMidX = (r1.x + r2.x) / 2
+        let rMidZ = (r1.z + r2.z) / 2
+        let rMidY = (r1.y + r2.y) / 2
+
+        // Translation
+        let tx = rMidX - rotatedMidX
+        let tz = rMidZ - rotatedMidZ
+
+        // Build and place model
+        do {
+            let (entity, metadata) = try IFCLoader.buildEntities(from: elements)
+            elementMetadata.merge(metadata) { _, new in new }
+
+            entity.orientation = simd_quatf(angle: rotation, axis: SIMD3(0, 1, 0))
+
+            let anchor = AnchorEntity(world: SIMD3<Float>(tx, rMidY, tz))
+            anchor.addChild(entity)
+            arView?.scene.addAnchor(anchor)
+
+            roomAnchor = anchor
+            roomEntity = entity
+            floorHeightOffset = 0
+
+            log("Model placed via edge alignment (rotation: \(String(format: "%.1f", rotation * 180 / .pi))°)")
+            clearAlignmentVisuals()
+            state = .heightAdjust
+        } catch {
+            log("FAILED to build entities: \(error)")
+            loadingError = "\(error)"
+        }
+    }
+
+    private func applyHeightOffset() {
+        guard let anchor = roomAnchor, edgeAlignPoints.count == 2 else { return }
+        let baseY = (edgeAlignPoints[0].y + edgeAlignPoints[1].y) / 2
+        anchor.position.y = baseY + floorHeightOffset
+    }
+
+    func confirmHeight() {
+        guard state == .heightAdjust else { return }
+        // Apply final height
+        if let anchor = roomAnchor, edgeAlignPoints.count == 2 {
+            let baseY = (edgeAlignPoints[0].y + edgeAlignPoints[1].y) / 2
+            anchor.position.y = baseY + floorHeightOffset
+        }
+        log("Height confirmed (offset: \(String(format: "%+.1f", floorHeightOffset * 100)) cm)")
+        state = .roomPlaced
     }
 
     private func placeAlignmentMarker(at position: SIMD3<Float>) {
@@ -349,8 +496,8 @@ class ARSessionManager: ObservableObject {
             arView?.scene.removeAnchor(marker)
         }
         alignmentMarkers.removeAll()
-        alignmentPoints.removeAll()
-        alignmentPointCount = 0
+        edgeAlignPoints.removeAll()
+        edgeAlignPointCount = 0
 
         if let line = alignmentLine {
             arView?.scene.removeAnchor(line)
@@ -358,28 +505,18 @@ class ARSessionManager: ObservableObject {
         }
     }
 
-    // MARK: - Calibration
+    // MARK: - Fixture Loading
 
-    func confirmAlignment() {
-        clearAlignmentVisuals()
-        state = .loading
-        loadModel(named: "BaseRoom-v2")
-    }
-
-    // MARK: - IFC Model Loading
-
-    private func loadModel(named filename: String) {
+    private func loadFixtureModel(named filename: String) {
         loadingError = nil
         log("Loading \(filename)...")
         IFCLoader.onLog = { [weak self] msg in self?.log(msg) }
-
-        let targetState: ARState = (state == .loading) ? .previewing : .fixturePreviewing
 
         Task.detached {
             do {
                 let elements = try await IFCLoader.parseAndValidate(named: filename)
                 await MainActor.run {
-                    self.finishLoading(elements, targetState: targetState)
+                    self.finishFixtureLoading(elements)
                 }
             } catch {
                 await MainActor.run {
@@ -391,7 +528,7 @@ class ARSessionManager: ObservableObject {
         }
     }
 
-    private func finishLoading(_ elements: [ValidatedElement], targetState: ARState) {
+    private func finishFixtureLoading(_ elements: [ValidatedElement]) {
         do {
             let (entity, metadata) = try IFCLoader.buildEntities(from: elements)
             elementMetadata.merge(metadata) { _, new in new }
@@ -422,7 +559,7 @@ class ARSessionManager: ObservableObject {
             applyPreviewTransform()
 
             log("Preview ghost active — move camera to position, adjust scale/rotation, then Place")
-            state = targetState
+            state = .fixturePreviewing
         } catch {
             log("FAILED: \(error)")
             loadingError = "\(error)"
@@ -430,12 +567,10 @@ class ARSessionManager: ObservableObject {
         }
     }
 
-    // MARK: - Fixture Loading
-
     func loadFixture(named filename: String) {
         pendingFixtureFilename = filename
         state = .fixtureLoading
-        loadModel(named: filename)
+        loadFixtureModel(named: filename)
     }
 
     // MARK: - Preview
@@ -446,8 +581,8 @@ class ARSessionManager: ObservableObject {
         // Raycast from upper-center of screen so ghost appears further ahead
         let aimPoint = CGPoint(x: arView.bounds.midX, y: arView.bounds.height * 0.35)
 
-        // Update preview anchor position
-        if state == .previewing || state == .fixturePreviewing {
+        // Update preview anchor position (fixtures only — room is placed via edge alignment)
+        if state == .fixturePreviewing {
             let results = arView.raycast(from: aimPoint, allowing: .existingPlaneGeometry, alignment: .horizontal)
             if let result = results.first {
                 let col = result.worldTransform.columns.3
@@ -483,22 +618,7 @@ class ARSessionManager: ObservableObject {
 
     private func applyPreviewTransform() {
         previewEntity?.scale = SIMD3<Float>(repeating: modelScale)
-        previewEntity?.orientation = simd_quatf(angle: gridRotation + modelRotation, axis: SIMD3(0, 1, 0))
-    }
-
-    func placeRoom() {
-        guard state == .previewing, let anchor = previewAnchor, let entity = previewEntity else { return }
-
-        IFCLoader.restoreMaterials(originalMaterials)
-        originalMaterials = []
-
-        roomAnchor = anchor
-        roomEntity = entity
-        previewAnchor = nil
-        previewEntity = nil
-
-        log("Room placed at \(anchor.position)")
-        state = .roomPlaced
+        previewEntity?.orientation = simd_quatf(angle: computedRotation + modelRotation, axis: SIMD3(0, 1, 0))
     }
 
     func placeFixture() {
@@ -625,6 +745,39 @@ class ARSessionManager: ObservableObject {
         log("Deleted \(info.ifcType) #\(info.id)")
         selectedElement = nil
         selectedEntityRef = nil
+    }
+
+    func hideSelectedElement() {
+        guard let info = selectedElement else { return }
+
+        IFCLoader.restoreMaterials(selectedOriginalMaterials)
+        selectedOriginalMaterials = []
+
+        info.entity.isEnabled = false
+        hiddenElements.append(HiddenElement(
+            id: info.id,
+            name: info.name ?? "Unnamed",
+            ifcType: info.ifcType,
+            entity: info.entity
+        ))
+
+        log("Hidden \(info.ifcType) #\(info.id)")
+        selectedElement = nil
+        selectedEntityRef = nil
+    }
+
+    func unhideElement(_ element: HiddenElement) {
+        element.entity.isEnabled = true
+        hiddenElements.removeAll { $0.id == element.id }
+        log("Unhidden \(element.ifcType) #\(element.id)")
+    }
+
+    func unhideAllElements() {
+        for element in hiddenElements {
+            element.entity.isEnabled = true
+        }
+        log("Unhidden \(hiddenElements.count) elements")
+        hiddenElements.removeAll()
     }
 
     func dismissSelection() {
@@ -979,13 +1132,7 @@ class ARSessionManager: ObservableObject {
     // MARK: - Grid Rotation
 
     func updateGridRotation() {
-        gridEntity?.orientation = simd_quatf(angle: gridRotation, axis: SIMD3(0, 1, 0))
-    }
-
-    func adjustRotation(by delta: Float) {
-        guard state == .calibrating else { return }
-        gridRotation += delta
-        updateGridRotation()
+        gridEntity?.orientation = simd_quatf(angle: computedRotation, axis: SIMD3(0, 1, 0))
     }
 
     // MARK: - Reset
@@ -1044,6 +1191,15 @@ class ARSessionManager: ObservableObject {
         clearAlignmentVisuals()
         loadingError = nil
 
-        state = floorAnchor != nil ? .aligning : .coaching
+        // Clear edge alignment state
+        floorPlan = nil
+        selectedEdgeIndex = nil
+        edgeArrowAngle = 0
+        edgeAlignPointCount = 0
+        floorHeightOffset = 0
+        parsedElements = nil
+        computedRotation = 0
+
+        state = .coaching
     }
 }

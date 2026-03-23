@@ -24,6 +24,7 @@ struct ContentView: View {
     @State private var capturedViewpoint: ARSessionManager.CameraViewpoint?
     @State private var bcfElementGlobalId: String?
     @State private var bcfElementIfcType: String?
+    @State private var showHiddenList = false
 
     var body: some View {
         ZStack {
@@ -40,8 +41,8 @@ struct ContentView: View {
 
                 Spacer()
 
-                // Preview sliders (room or fixture)
-                if arManager.state == .previewing || arManager.state == .fixturePreviewing {
+                // Preview sliders (fixture only — room placed via edge alignment)
+                if arManager.state == .fixturePreviewing {
                     VStack(spacing: 10) {
                         HStack(spacing: 8) {
                             Image(systemName: "arrow.up.left.and.arrow.down.right")
@@ -87,19 +88,9 @@ struct ContentView: View {
                 // Bottom toolbar
                 HStack {
                     // Primary action (left)
-                    if arManager.state == .calibrating {
-                        Button(action: { arManager.confirmAlignment() }) {
+                    if arManager.state == .heightAdjust {
+                        Button(action: { arManager.confirmHeight() }) {
                             Label("Confirm", systemImage: "checkmark.circle.fill")
-                                .font(.subheadline)
-                                .fontWeight(.semibold)
-                                .padding(.horizontal, 20)
-                                .padding(.vertical, 12)
-                                .background(.green.opacity(0.85), in: Capsule())
-                                .foregroundStyle(.white)
-                        }
-                    } else if arManager.state == .previewing {
-                        Button(action: { arManager.placeRoom() }) {
-                            Label("Place Room", systemImage: "checkmark.circle.fill")
                                 .font(.subheadline)
                                 .fontWeight(.semibold)
                                 .padding(.horizontal, 20)
@@ -199,12 +190,22 @@ struct ContentView: View {
 
                     // Secondary actions (right)
                     HStack(spacing: 10) {
-                        if [.calibrating, .previewing, .fixturePreviewing, .roomPlaced, .wallStart, .wallEnd, .wallAdjust, .elementMoving, .done].contains(arManager.state) {
+                        if [.floorPlanPicking, .edgeAligning, .heightAdjust, .fixturePreviewing, .roomPlaced, .wallStart, .wallEnd, .wallAdjust, .elementMoving, .done].contains(arManager.state) {
                             Button(action: { arManager.reset() }) {
                                 Image(systemName: "arrow.counterclockwise")
                                     .font(.title3)
                                     .padding(10)
                                     .background(.ultraThinMaterial, in: Circle())
+                            }
+                        }
+
+                        if !arManager.hiddenElements.isEmpty {
+                            Button(action: { showHiddenList = true }) {
+                                Image(systemName: "eye.slash")
+                                    .font(.title3)
+                                    .padding(10)
+                                    .background(.ultraThinMaterial, in: Circle())
+                                    .foregroundStyle(.orange)
                             }
                         }
 
@@ -292,6 +293,40 @@ struct ContentView: View {
                 .frame(maxHeight: .infinity, alignment: .center)
             }
 
+            // Floor plan picker overlay
+            if arManager.state == .floorPlanPicking, let plan = arManager.floorPlan {
+                FloorPlanView(
+                    floorPlan: plan,
+                    selectedEdgeIndex: $arManager.selectedEdgeIndex,
+                    arrowAngle: $arManager.edgeArrowAngle,
+                    onConfirm: { arManager.confirmEdgeSelection() }
+                )
+                .transition(.opacity)
+            }
+
+            // Height adjustment slider
+            if arManager.state == .heightAdjust {
+                HStack {
+                    Spacer()
+                    VStack(spacing: 4) {
+                        Text(String(format: "%+.0f cm", arManager.floorHeightOffset * 100))
+                            .font(.system(size: 11, design: .monospaced))
+                        Slider(value: $arManager.floorHeightOffset, in: -0.5...0.5)
+                            .frame(width: 150)
+                            .rotationEffect(.degrees(-90))
+                            .frame(width: 30, height: 150)
+                        Image(systemName: "arrow.up.and.down")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(.vertical, 12)
+                    .padding(.horizontal, 8)
+                    .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16))
+                    .padding(.trailing, 8)
+                }
+                .frame(maxHeight: .infinity, alignment: .center)
+            }
+
             // Fixture sidebar
             if arManager.state == .roomPlaced && arManager.selectedElement == nil {
                 fixtureSidebar
@@ -332,6 +367,9 @@ struct ContentView: View {
         }
         .sheet(isPresented: $showBCFList) {
             bcfListSheet
+        }
+        .sheet(isPresented: $showHiddenList) {
+            hiddenElementsSheet
         }
     }
 
@@ -459,6 +497,43 @@ struct ContentView: View {
         }
     }
 
+    private var hiddenElementsSheet: some View {
+        NavigationView {
+            List {
+                ForEach(arManager.hiddenElements) { element in
+                    HStack {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(element.name)
+                                .font(.subheadline)
+                                .fontWeight(.semibold)
+                            Text(element.ifcType)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Button(action: { arManager.unhideElement(element) }) {
+                            Image(systemName: "eye")
+                                .foregroundStyle(.blue)
+                        }
+                    }
+                }
+            }
+            .navigationTitle("Hidden (\(arManager.hiddenElements.count))")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Close") { showHiddenList = false }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Unhide All") {
+                        arManager.unhideAllElements()
+                        showHiddenList = false
+                    }
+                }
+            }
+        }
+    }
+
     private var bcfListSheet: some View {
         NavigationView {
             List {
@@ -515,13 +590,13 @@ struct ContentView: View {
         VStack(alignment: .leading, spacing: 8) {
             // Step indicator
             HStack(spacing: 0) {
-                stepDot(step: 1, active: arManager.state == .aligning && arManager.alignmentPointCount == 0)
-                stepLine(done: arManager.state != .aligning || arManager.alignmentPointCount > 0)
-                stepDot(step: 2, active: arManager.state == .aligning && arManager.alignmentPointCount == 1)
+                stepDot(step: 1, active: arManager.state == .loading)
+                stepLine(done: isStepDone(1))
+                stepDot(step: 2, active: arManager.state == .floorPlanPicking)
                 stepLine(done: isStepDone(2))
-                stepDot(step: 3, active: arManager.state == .calibrating)
+                stepDot(step: 3, active: arManager.state == .edgeAligning)
                 stepLine(done: isStepDone(3))
-                stepDot(step: 4, active: arManager.state == .loading || arManager.state == .previewing)
+                stepDot(step: 4, active: arManager.state == .heightAdjust)
                 stepLine(done: isStepDone(4))
                 stepDot(step: 5, active: [.roomPlaced, .fixtureLoading, .fixturePreviewing, .wallStart, .wallEnd, .wallAdjust, .elementMoving, .done].contains(arManager.state))
             }
@@ -544,16 +619,14 @@ struct ContentView: View {
         switch arManager.state {
         case .coaching:
             return ""
-        case .aligning where arManager.alignmentPointCount == 0:
-            return "Step 1: Tap first point"
-        case .aligning:
-            return "Step 2: Tap second point"
-        case .calibrating:
-            return "Step 3: Fine-tune alignment"
         case .loading:
-            return "Step 4: Loading room..."
-        case .previewing:
-            return "Step 4: Position room"
+            return "Step 1: Loading model..."
+        case .floorPlanPicking:
+            return "Step 2: Select wall edge"
+        case .edgeAligning:
+            return arManager.edgeAlignPointCount == 0 ? "Step 3: Tap first point" : "Step 3: Tap second point"
+        case .heightAdjust:
+            return "Step 4: Adjust floor height"
         case .roomPlaced:
             return arManager.loadingError != nil ? "Error" : "Step 5: Add fixtures"
         case .fixtureLoading:
@@ -577,16 +650,16 @@ struct ContentView: View {
         switch arManager.state {
         case .coaching:
             return ""
-        case .aligning where arManager.alignmentPointCount == 0:
-            return "Tap on the floor at the base of a wall. This sets the first reference point."
-        case .aligning:
-            return "Tap a second point along the same wall edge on the floor. The line between the two points will align the grid."
-        case .calibrating:
-            return "The grid is aligned to your wall. Use two fingers to twist and fine-tune the angle, then tap Confirm."
         case .loading:
-            return "Parsing room IFC and preparing 3D model..."
-        case .previewing:
-            return "Move your device to position the room. Use the sliders to adjust scale and rotation, then tap Place Room."
+            return "Parsing IFC and extracting floor plan..."
+        case .floorPlanPicking:
+            return "Tap a wall in the floor plan that you can see. Drag the arrow to show which side you're standing on."
+        case .edgeAligning:
+            return arManager.edgeAlignPointCount == 0
+                ? "Tap on the floor at one end of the real wall."
+                : "Tap the other end of the same wall."
+        case .heightAdjust:
+            return "Use the slider to fine-tune the vertical position, then tap Confirm."
         case .roomPlaced:
             if let error = arManager.loadingError {
                 return error
@@ -637,15 +710,15 @@ struct ContentView: View {
     private func isStepDone(_ step: Int) -> Bool {
         let laterStates: Set<ARState> = [.roomPlaced, .fixtureLoading, .fixturePreviewing, .wallStart, .wallEnd, .wallAdjust, .elementMoving, .done]
         switch step {
-        case 1:
-            return arManager.alignmentPointCount >= 1 || arManager.state == .calibrating || arManager.state == .loading || arManager.state == .previewing || laterStates.contains(arManager.state)
-        case 2:
-            return arManager.state == .calibrating || arManager.state == .loading || arManager.state == .previewing || laterStates.contains(arManager.state)
-        case 3:
-            return arManager.state == .loading || arManager.state == .previewing || laterStates.contains(arManager.state)
-        case 4:
+        case 1: // Load
+            return [.floorPlanPicking, .edgeAligning, .heightAdjust].contains(arManager.state) || laterStates.contains(arManager.state)
+        case 2: // Pick edge
+            return [.edgeAligning, .heightAdjust].contains(arManager.state) || laterStates.contains(arManager.state)
+        case 3: // Align
+            return arManager.state == .heightAdjust || laterStates.contains(arManager.state)
+        case 4: // Height
             return laterStates.contains(arManager.state)
-        case 5:
+        case 5: // Fixtures / Done
             return arManager.state == .done
         default:
             return false
@@ -726,7 +799,7 @@ struct ContentView: View {
 
     private func elementBubble(_ element: ElementInfo) -> some View {
         GeometryReader { geo in
-            let bubbleWidth: CGFloat = 280
+            let bubbleWidth: CGFloat = 340
             let bubbleHeight: CGFloat = 120
             let tapPt = arManager.selectedScreenPoint
             // Position bubble above the tap point, clamped to screen
@@ -761,6 +834,18 @@ struct ContentView: View {
                         .frame(width: 56, height: 44)
                         .background(.green.opacity(0.2), in: RoundedRectangle(cornerRadius: 8))
                     }
+
+                    Button(action: { arManager.hideSelectedElement() }) {
+                        VStack(spacing: 2) {
+                            Image(systemName: "eye.slash")
+                                .font(.body)
+                            Text("Hide")
+                                .font(.system(size: 9))
+                        }
+                        .frame(width: 56, height: 44)
+                        .background(.orange.opacity(0.2), in: RoundedRectangle(cornerRadius: 8))
+                    }
+                    .foregroundStyle(.orange)
 
                     Button(action: { arManager.deleteSelectedElement() }) {
                         VStack(spacing: 2) {
