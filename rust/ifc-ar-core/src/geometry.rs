@@ -1,5 +1,5 @@
-use ifc_lite_core::has_geometry_by_name;
-use ifc_lite_geometry::GeometryRouter;
+use ifc_lite_core::{has_geometry_by_name, EntityScanner};
+use ifc_lite_geometry::{calculate_normals, GeometryRouter};
 use rustc_hash::FxHashMap;
 
 use crate::color::{build_style_index, default_color_for_type};
@@ -28,25 +28,80 @@ pub fn process_geometry(
     // Create geometry router with automatic unit detection
     let router = GeometryRouter::with_units(&parsed.content, &mut decoder);
 
+    // Build void index: maps host element IDs → their opening element IDs
+    // by scanning IfcRelVoidsElement relationships
+    let mut void_map: FxHashMap<u32, Vec<u32>> = FxHashMap::default();
+    {
+        let mut scanner = EntityScanner::new(&parsed.content);
+        while let Some((id, type_name, start, end)) = scanner.next_entity() {
+            if type_name == "IFCRELVOIDSELEMENT" {
+                if let Ok(entity) = decoder.decode_at_with_id(id, start, end) {
+                    if let (Some(host_id), Some(opening_id)) =
+                        (entity.get_ref(4), entity.get_ref(5))
+                    {
+                        void_map.entry(host_id).or_default().push(opening_id);
+                    }
+                }
+            }
+        }
+    }
+
     let mut elements = Vec::new();
     let mut bounds = ModelBounds::default();
 
-    // Process only geometry-bearing entities (IfcProduct subtypes)
-    for scanned in parsed.all_entities.iter().filter(|e| has_geometry_by_name(&e.ifc_type)) {
+    // Process only geometry-bearing entities, skipping non-renderable types:
+    // - IFCOPENINGELEMENT/IFCOPENINGSTANDARDCASE: void shapes used only for CSG subtraction
+    // - IFCSPACE: invisible room volumes
+    for scanned in parsed.all_entities.iter().filter(|e| {
+        has_geometry_by_name(&e.ifc_type)
+            && !matches!(
+                e.ifc_type.as_str(),
+                "IFCOPENINGELEMENT" | "IFCOPENINGSTANDARDCASE" | "IFCSPACE"
+            )
+    }) {
         let Ok(entity) = decoder.decode_by_id(scanned.id) else {
             continue;
         };
 
-        // Use GeometryRouter to process the element's representation chain
-        let mesh = match router.process_element(&entity, &mut decoder) {
-            Ok(mesh) if !mesh.is_empty() => {
-                let mut mesh = mesh;
-                z_up_to_y_up(&mut mesh.positions);
-                z_up_to_y_up(&mut mesh.normals);
-                bounds.extend_from_positions(&mesh.positions);
-                Some(mesh)
+        // Use GeometryRouter to process the element's representation chain.
+        // For elements with openings, use CSG void subtraction to cut holes.
+        let has_openings = void_map.contains_key(&scanned.id);
+        let mesh = if has_openings {
+            match router.process_element_with_voids(&entity, &mut decoder, &void_map) {
+                Ok(mut mesh) if !mesh.is_empty() => {
+                    if mesh.normals.len() != mesh.positions.len() {
+                        calculate_normals(&mut mesh);
+                    }
+                    z_up_to_y_up(&mut mesh.positions);
+                    z_up_to_y_up(&mut mesh.normals);
+                    bounds.extend_from_positions(&mesh.positions);
+                    Some(mesh)
+                }
+                _ => {
+                    // Fallback: render without void subtraction rather than skipping
+                    match router.process_element(&entity, &mut decoder) {
+                        Ok(mesh) if !mesh.is_empty() => {
+                            let mut mesh = mesh;
+                            z_up_to_y_up(&mut mesh.positions);
+                            z_up_to_y_up(&mut mesh.normals);
+                            bounds.extend_from_positions(&mesh.positions);
+                            Some(mesh)
+                        }
+                        _ => None,
+                    }
+                }
             }
-            _ => None,
+        } else {
+            match router.process_element(&entity, &mut decoder) {
+                Ok(mesh) if !mesh.is_empty() => {
+                    let mut mesh = mesh;
+                    z_up_to_y_up(&mut mesh.positions);
+                    z_up_to_y_up(&mut mesh.normals);
+                    bounds.extend_from_positions(&mesh.positions);
+                    Some(mesh)
+                }
+                _ => None,
+            }
         };
 
         // Resolve color: style map → default by type
