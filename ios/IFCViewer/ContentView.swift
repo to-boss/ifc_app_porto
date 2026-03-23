@@ -72,15 +72,46 @@ struct ContentView: View {
 
                 // Debug log (above toolbar)
                 if showDebugLog && !arManager.debugLog.isEmpty {
-                    VStack(alignment: .leading, spacing: 2) {
-                        ForEach(Array(arManager.debugLog.enumerated()), id: \.offset) { _, line in
-                            Text(line)
-                                .font(.system(size: 9, design: .monospaced))
+                    VStack(spacing: 0) {
+                        HStack {
+                            Text("Log (\(arManager.debugLog.count))")
+                                .font(.system(size: 10, weight: .bold, design: .monospaced))
                                 .foregroundStyle(.green)
+                            Spacer()
+                            ShareLink(item: arManager.debugLog.joined(separator: "\n")) {
+                                Label("Export", systemImage: "square.and.arrow.up")
+                                    .font(.system(size: 10, weight: .semibold))
+                                    .foregroundStyle(.green)
+                            }
+                        }
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+
+                        ScrollViewReader { proxy in
+                            ScrollView {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    ForEach(Array(arManager.debugLog.enumerated()), id: \.offset) { idx, line in
+                                        Text(line)
+                                            .font(.system(size: 9, design: .monospaced))
+                                            .foregroundStyle(.green)
+                                            .id(idx)
+                                    }
+                                }
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(.horizontal, 8)
+                            }
+                            .frame(maxHeight: 200)
+                            .onAppear {
+                                proxy.scrollTo(arManager.debugLog.count - 1, anchor: .bottom)
+                            }
+                            .onChange(of: arManager.debugLog.count) { _ in
+                                withAnimation(.easeOut(duration: 0.1)) {
+                                    proxy.scrollTo(arManager.debugLog.count - 1, anchor: .bottom)
+                                }
+                            }
                         }
                     }
-                    .padding(8)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.vertical, 4)
                     .background(.black.opacity(0.7))
                     .padding(.horizontal, 8)
                 }

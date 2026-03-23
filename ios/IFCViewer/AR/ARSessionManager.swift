@@ -64,7 +64,6 @@ class ARSessionManager: ObservableObject {
     func log(_ msg: String) {
         logger.info("\(msg)")
         debugLog.append(msg)
-        if debugLog.count > 30 { debugLog.removeFirst() }
     }
 
     weak var arView: ARView?
@@ -79,6 +78,8 @@ class ARSessionManager: ObservableObject {
     private var alignmentLine: AnchorEntity?
     private var parsedElements: [ValidatedElement]?
     private var modelMinY: Float = 0  // lowest vertex Y (negative when centered)
+    private var fixtureMinY: Float = 0  // lowest vertex Y of current fixture
+    private var slabThickness: Float = 0  // slab top Y - modelMinY (model space)
     private var edgeAlignMarker: AnchorEntity?
     private var edgeLiveLineAnchor: AnchorEntity?
     private var floorMarker: AnchorEntity?
@@ -331,13 +332,31 @@ class ARSessionManager: ObservableObject {
                     }
                 }
 
+                // Compute floor slab thickness (walking surface offset)
+                // Only consider slabs whose min Y touches modelMinY (= floor slab, not ceiling)
+                let tolerance: Float = 0.01
+                var floorSlabMaxY: Float = -.infinity
+                for elem in elements where elem.ifcType == "IFCSLAB" {
+                    var elemMinY: Float = .infinity
+                    var elemMaxY: Float = -.infinity
+                    for i in stride(from: 1, to: elem.positions.count, by: 3) {
+                        elemMinY = min(elemMinY, elem.positions[i])
+                        elemMaxY = max(elemMaxY, elem.positions[i])
+                    }
+                    if elemMinY < minY + tolerance {
+                        floorSlabMaxY = max(floorSlabMaxY, elemMaxY)
+                    }
+                }
+                let thickness = floorSlabMaxY > -.infinity && minY < .infinity ? floorSlabMaxY - minY : 0
+
                 await MainActor.run {
                     self.parsedElements = elements
                     self.modelMinY = minY == .infinity ? 0 : minY
+                    self.slabThickness = thickness
                     self.floorPlan = plan
                     self.selectedEdgeIndex = nil
                     self.edgeArrowAngle = 0
-                    self.log(String(format: "Floor plan: %d edges, model floor Y: %.2fm", plan.edges.count, self.modelMinY))
+                    self.log(String(format: "Floor plan: %d edges, model floor Y: %.2fm, slab thickness: %.2fm", plan.edges.count, self.modelMinY, self.slabThickness))
                     self.state = .floorPlanPicking
                 }
             } catch {
@@ -551,8 +570,10 @@ class ARSessionManager: ObservableObject {
             roomEntity = entity
             floorHeightOffset = 0
             computedScaleFactor = scaleFactor
+            detectedFloorY = rMidY
 
             log(String(format: "Model placed (rotation: %.1f°, scale: %.2fx)", rotation * 180 / .pi, scaleFactor))
+            log(String(format: "[Y-DEBUG] rMidY=%.4f, anchorY=%.4f, modelMinY=%.4f, detectedFloorY=%.4f", rMidY, anchorY, modelMinY, detectedFloorY))
             drawDebugGuides(edge: edge, scaleFactor: scaleFactor, rotation: rotation, tx: tx, tz: tz, rMidY: rMidY)
 
             // Store base Y for height fine-tuning
@@ -634,34 +655,73 @@ class ARSessionManager: ObservableObject {
 
     private var floorBaseY: Float = 0  // anchor Y before height offset
 
+    private var detectedFloorY: Float = 0  // actual AR floor level from user setup
+    private var groundY: Float { detectedFloorY + floorHeightOffset + slabThickness * computedScaleFactor }
+
+    /// Intersect camera ray through screen point with horizontal plane at groundY.
+    private func floorHitPoint(from screenPoint: CGPoint) -> SIMD3<Float>? {
+        guard let arView = arView else { return nil }
+        let cam = arView.cameraTransform
+        let origin = cam.translation
+        let forward = cam.matrix.columns.2
+        let dir = -SIMD3<Float>(forward.x, forward.y, forward.z)
+        guard dir.y < -0.01 else { return nil }
+        let t = (groundY - origin.y) / dir.y
+        guard t > 0 else { return nil }
+        return SIMD3<Float>(origin.x + dir.x * t, groundY, origin.z + dir.z * t)
+    }
+
     /// User aims at floor and taps "Set Floor" — lock the Y.
     func setFloorPoint() {
         guard state == .floorSetting, let marker = floorMarker, let anchor = roomAnchor else { return }
 
         let floorY = marker.position.y
-        floorBaseY = floorY - modelMinY * computedScaleFactor
-        anchor.position.y = floorBaseY
-        floorHeightOffset = 0
+        // anchor.position is relative to anchoring target — compute needed offset
+        let neededOffset = floorY - detectedFloorY
+        detectedFloorY = floorY
+        floorHeightOffset = neededOffset  // triggers applyHeightOffset
 
         // Remove floor marker
         arView?.scene.removeAnchor(marker)
         floorMarker = nil
 
         log(String(format: "Floor set at Y=%.3f", floorY))
+        log(String(format: "[Y-DEBUG] setFloorPoint: detectedFloorY=%.4f, floorBaseY=%.4f", detectedFloorY, floorBaseY))
         clearDebugGuides()
         state = .heightAdjust
     }
 
     private func applyHeightOffset() {
         guard let anchor = roomAnchor else { return }
-        anchor.position.y = floorBaseY + floorHeightOffset
+        // AnchorEntity.position is relative to its anchoring target, not absolute
+        anchor.position.y = floorHeightOffset
     }
 
     func confirmHeight() {
         guard state == .heightAdjust else { return }
         applyHeightOffset()
         log("Height confirmed (offset: \(String(format: "%+.1f", floorHeightOffset * 100)) cm)")
+
+        // Immediate readings
+        let setAnchorY = roomAnchor?.position.y ?? -999
+        let anchorWorldY = roomAnchor?.position(relativeTo: nil).y ?? -999
+        log(String(format: "[Y-ANCHOR] immediate: set=%.4f, worldPos=%.4f, groundY=%.4f", setAnchorY, anchorWorldY, groundY))
+
+        gridEntity?.isEnabled = false
         state = .roomPlaced
+
+        // Deferred readings — after RealityKit processes transforms
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+            guard let self else { return }
+            let anchorY = self.roomAnchor?.position.y ?? -999
+            let anchorWY = self.roomAnchor?.position(relativeTo: nil).y ?? -999
+            let entityWY = self.roomEntity?.position(relativeTo: nil).y ?? -999
+            let boundsMinY = self.roomEntity?.visualBounds(relativeTo: nil).min.y ?? -999
+            let expectedSlabBottom = anchorY + self.modelMinY * self.computedScaleFactor
+            self.log(String(format: "[Y-ANCHOR] deferred: anchor.pos.y=%.4f, anchor.worldY=%.4f", anchorY, anchorWY))
+            self.log(String(format: "[Y-ANCHOR] deferred: entity.worldY=%.4f, bounds.min.y=%.4f", entityWY, boundsMinY))
+            self.log(String(format: "[Y-ANCHOR] deferred: expectedSlabBot=%.4f, DRIFT=%.4f", expectedSlabBottom, boundsMinY - expectedSlabBottom))
+        }
     }
 
     private func placeAlignmentMarker(at position: SIMD3<Float>) {
@@ -832,18 +892,37 @@ class ARSessionManager: ObservableObject {
                 return
             }
 
+            // Compute fixture floor level (same as modelMinY for the room)
+            var minY: Float = .infinity
+            for elem in elements {
+                for i in stride(from: 1, to: elem.positions.count, by: 3) {
+                    minY = min(minY, elem.positions[i])
+                }
+            }
+            fixtureMinY = minY == .infinity ? 0 : minY
+            log(String(format: "Fixture floor Y: %.2fm", fixtureMinY))
+
             // Store original materials before applying ghost effect
             originalMaterials = IFCLoader.collectMaterials(from: entity)
             IFCLoader.applyGhostEffect(to: entity)
 
-            // Place as ghost preview at camera position
-            let anchor = AnchorEntity(world: floorAnchor.position)
+            // Offset entity so its bottom sits at the anchor Y
+            entity.position.y = -fixtureMinY
+
+            // Place ghost at detected floor level
+            let gy = groundY
+            log(String(format: "[Y-DEBUG] fixture: groundY=%.4f, fixtureMinY=%.4f, entity.y=%.4f, modelScale=%.4f", gy, fixtureMinY, -fixtureMinY, modelScale))
+            // Anchor at world origin so .position = absolute world position
+            let rx = roomAnchor?.position(relativeTo: nil).x ?? 0
+            let rz = roomAnchor?.position(relativeTo: nil).z ?? 0
+            let anchor = AnchorEntity(world: .zero)
+            anchor.position = SIMD3<Float>(rx, gy, rz)
             anchor.addChild(entity)
             arView.scene.addAnchor(anchor)
 
             previewAnchor = anchor
             previewEntity = entity
-            modelScale = 1.0
+            modelScale = computedScaleFactor
             modelRotation = 0
             applyPreviewTransform()
 
@@ -867,26 +946,20 @@ class ARSessionManager: ObservableObject {
     func updatePreviewPosition() {
         guard let arView = arView else { return }
 
-        // Raycast from upper-center of screen so ghost appears further ahead
-        let aimPoint = CGPoint(x: arView.bounds.midX, y: arView.bounds.height * 0.35)
+        // Raycast from center of screen
+        let aimPoint = CGPoint(x: arView.bounds.midX, y: arView.bounds.midY)
 
         // Update preview anchor position (fixtures only — room is placed via edge alignment)
         if state == .fixturePreviewing {
-            let results = arView.raycast(from: aimPoint, allowing: .existingPlaneGeometry, alignment: .horizontal)
-            if let result = results.first {
-                let col = result.worldTransform.columns.3
-                previewAnchor?.position = SIMD3<Float>(col.x, col.y, col.z)
+            if let hit = floorHitPoint(from: aimPoint) {
+                previewAnchor?.position = hit
             }
         }
 
         // Element moving: update position within room
         if state == .elementMoving, let entity = movingEntity, let roomEnt = roomEntity {
-            let center = aimPoint
-            let results = arView.raycast(from: center, allowing: .existingPlaneGeometry, alignment: .horizontal)
-            if let result = results.first {
-                let col = result.worldTransform.columns.3
-                let worldPos = SIMD3<Float>(col.x, col.y, col.z)
-                let localPos = roomEnt.convert(position: worldPos, from: nil)
+            if let hit = floorHitPoint(from: aimPoint) {
+                let localPos = roomEnt.convert(position: hit, from: nil)
                 entity.position = localPos
             }
         }
@@ -962,6 +1035,7 @@ class ARSessionManager: ObservableObject {
 
     private func applyPreviewTransform() {
         previewEntity?.scale = SIMD3<Float>(repeating: modelScale)
+        previewEntity?.position.y = -fixtureMinY * modelScale
         previewEntity?.orientation = simd_quatf(angle: computedRotation + modelRotation, axis: SIMD3(0, 1, 0))
     }
 
@@ -1270,6 +1344,7 @@ class ARSessionManager: ObservableObject {
 
         guard let roomAnchor = roomAnchor else { return }
         let roomPos = roomAnchor.position
+        log(String(format: "[Y-DEBUG] wall: groundY=%.4f, roomPos.y=%.4f, startPt.y=%.4f, endPt.y=%.4f", groundY, roomPos.y, startPt.y, endPt.y))
 
         // Compute wall coordinates relative to room anchor
         let relStartX = startPt.x - roomPos.x
@@ -1316,7 +1391,7 @@ class ARSessionManager: ObservableObject {
                     anchor = existing
                     anchor.children.removeAll()
                 } else {
-                    anchor = AnchorEntity(world: roomPos)
+                    anchor = AnchorEntity(world: SIMD3<Float>(roomPos.x, groundY, roomPos.z))
                     arView?.scene.addAnchor(anchor)
                     wallPreviewAnchor = anchor
                 }
@@ -1331,11 +1406,8 @@ class ARSessionManager: ObservableObject {
     private func updateWallPreview() {
         guard let arView = arView else { return }
 
-        let aimPoint = CGPoint(x: arView.bounds.midX, y: arView.bounds.height * 0.35)
-        let results = arView.raycast(from: aimPoint, allowing: .existingPlaneGeometry, alignment: .horizontal)
-        guard let result = results.first else { return }
-        let col = result.worldTransform.columns.3
-        let floorPoint = SIMD3<Float>(col.x, col.y, col.z)
+        let aimPoint = CGPoint(x: arView.bounds.midX, y: arView.bounds.midY)
+        guard let floorPoint = floorHitPoint(from: aimPoint) else { return }
 
         if state == .wallStart {
             // Move centroid marker to follow camera
@@ -1544,6 +1616,7 @@ class ARSessionManager: ObservableObject {
         floorHeightOffset = 0
         parsedElements = nil
         modelMinY = 0
+        fixtureMinY = 0
         computedRotation = 0
         computedScaleFactor = 1.0
         modelEdgeLength = 0
@@ -1561,7 +1634,10 @@ class ARSessionManager: ObservableObject {
             floorMarker = nil
         }
         floorBaseY = 0
+        detectedFloorY = 0
+        slabThickness = 0
         clearDebugGuides()
+        gridEntity?.isEnabled = true
 
         state = .coaching
     }
