@@ -54,6 +54,7 @@ class ARSessionManager: ObservableObject {
     }
 
     weak var arView: ARView?
+    private let maxSelectionDistance: Float = 10.0  // meters
 
     private var floorAnchor: AnchorEntity?
     private var gridEntity: FloorGridEntity?
@@ -171,47 +172,72 @@ class ARSessionManager: ObservableObject {
                 return
             }
 
-            // Hit-test against placed entities
+            // Screen-space hit test (forgiving) + distance filter
+            let cameraPos = arView.cameraTransform.translation
             let hits = arView.entities(at: point)
+
+            // Find the closest valid ifc_ entity within range
+            var bestEntity: Entity?
+            var bestId: UInt64 = 0
+            var bestMeta: ValidatedElement?
+            var bestDist: Float = maxSelectionDistance
+
             for entity in hits {
-                // Walk up to find a named ifc_ entity
                 var current: Entity? = entity
                 while let e = current {
                     if e.name.hasPrefix("ifc_"),
                        let idStr = e.name.split(separator: "_").last,
                        let id = UInt64(idStr),
                        let meta = elementMetadata[id] {
-                        // Find the owning anchor
-                        if let anchor = findOwningAnchor(for: e) {
-                            let isRoom = (anchor === roomAnchor)
-                            selectedEntityRef = e
-                            selectedScreenPoint = point
-                            selectedElement = ElementInfo(
-                                id: id,
-                                ifcType: meta.ifcType,
-                                name: meta.name,
-                                globalId: meta.globalId,
-                                properties: meta.properties,
-                                anchor: anchor,
-                                entity: e,
-                                isRoomElement: isRoom
-                            )
-                            // Highlight selected entity
-                            if let model = e as? ModelEntity, let mats = model.model?.materials {
-                                selectedOriginalMaterials = [(model, mats)]
-                                var highlight = PhysicallyBasedMaterial()
-                                highlight.baseColor = .init(tint: .systemYellow)
-                                highlight.metallic = .init(floatLiteral: 0.1)
-                                highlight.roughness = .init(floatLiteral: 0.5)
-                                highlight.blending = .transparent(opacity: .init(floatLiteral: 0.8))
-                                model.model?.materials = [highlight]
-                            }
-                            log("Selected: \(meta.ifcType) #\(id)\(isRoom ? " (room)" : "")")
-                            return
+                        let worldPos = e.position(relativeTo: nil)
+                        let dist = simd_distance(worldPos, cameraPos)
+                        if dist < bestDist {
+                            bestEntity = e
+                            bestId = id
+                            bestMeta = meta
+                            bestDist = dist
                         }
+                        break
                     }
                     current = e.parent
                 }
+            }
+
+            if let e = bestEntity, let meta = bestMeta, let anchor = findOwningAnchor(for: e) {
+                let isRoom = (anchor === roomAnchor)
+                selectedEntityRef = e
+                // Use visual center for bubble position
+                let bounds = e.visualBounds(relativeTo: nil)
+                let center3D = bounds.center
+                if let screenPt = arView.project(center3D) {
+                    selectedScreenPoint = CGPoint(x: CGFloat(screenPt.x), y: CGFloat(screenPt.y))
+                } else {
+                    selectedScreenPoint = point
+                }
+                selectedElement = ElementInfo(
+                    id: bestId,
+                    ifcType: meta.ifcType,
+                    name: meta.name,
+                    globalId: meta.globalId,
+                    properties: meta.properties,
+                    anchor: anchor,
+                    entity: e,
+                    isRoomElement: isRoom
+                )
+                // Highlight: collect this entity + all descendant ModelEntities
+                selectedOriginalMaterials = IFCLoader.collectMaterials(from: e)
+                if let model = e as? ModelEntity, let mats = model.model?.materials {
+                    selectedOriginalMaterials.insert((model, mats), at: 0)
+                }
+                var highlight = PhysicallyBasedMaterial()
+                highlight.baseColor = .init(tint: .systemYellow)
+                highlight.metallic = .init(floatLiteral: 0.1)
+                highlight.roughness = .init(floatLiteral: 0.5)
+                highlight.blending = .transparent(opacity: .init(floatLiteral: 0.8))
+                for (model, _) in selectedOriginalMaterials {
+                    model.model?.materials = [highlight]
+                }
+                log("Selected: \(meta.ifcType) #\(bestId) at \(String(format: "%.2f", bestDist))m\(isRoom ? " (room)" : "")")
             }
         }
     }
@@ -417,10 +443,12 @@ class ARSessionManager: ObservableObject {
     func updatePreviewPosition() {
         guard let arView = arView else { return }
 
+        // Raycast from upper-center of screen so ghost appears further ahead
+        let aimPoint = CGPoint(x: arView.bounds.midX, y: arView.bounds.height * 0.35)
+
         // Update preview anchor position
         if state == .previewing || state == .fixturePreviewing {
-            let center = CGPoint(x: arView.bounds.midX, y: arView.bounds.midY)
-            let results = arView.raycast(from: center, allowing: .existingPlaneGeometry, alignment: .horizontal)
+            let results = arView.raycast(from: aimPoint, allowing: .existingPlaneGeometry, alignment: .horizontal)
             if let result = results.first {
                 let col = result.worldTransform.columns.3
                 previewAnchor?.position = SIMD3<Float>(col.x, col.y, col.z)
@@ -429,7 +457,7 @@ class ARSessionManager: ObservableObject {
 
         // Element moving: update position within room
         if state == .elementMoving, let entity = movingEntity, let roomEnt = roomEntity {
-            let center = CGPoint(x: arView.bounds.midX, y: arView.bounds.midY)
+            let center = aimPoint
             let results = arView.raycast(from: center, allowing: .existingPlaneGeometry, alignment: .horizontal)
             if let result = results.first {
                 let col = result.worldTransform.columns.3
@@ -444,10 +472,10 @@ class ARSessionManager: ObservableObject {
             updateWallPreview()
         }
 
-        // Track selected entity screen position for the bubble
+        // Track selected entity screen position for the bubble (use visual center)
         if let entity = selectedEntityRef, selectedElement != nil {
-            let worldPos = entity.position(relativeTo: nil)
-            if let screenPt = arView.project(worldPos) {
+            let center3D = entity.visualBounds(relativeTo: nil).center
+            if let screenPt = arView.project(center3D) {
                 selectedScreenPoint = CGPoint(x: CGFloat(screenPt.x), y: CGFloat(screenPt.y))
             }
         }
@@ -806,8 +834,8 @@ class ARSessionManager: ObservableObject {
     private func updateWallPreview() {
         guard let arView = arView else { return }
 
-        let center = CGPoint(x: arView.bounds.midX, y: arView.bounds.midY)
-        let results = arView.raycast(from: center, allowing: .existingPlaneGeometry, alignment: .horizontal)
+        let aimPoint = CGPoint(x: arView.bounds.midX, y: arView.bounds.height * 0.35)
+        let results = arView.raycast(from: aimPoint, allowing: .existingPlaneGeometry, alignment: .horizontal)
         guard let result = results.first else { return }
         let col = result.worldTransform.columns.3
         let floorPoint = SIMD3<Float>(col.x, col.y, col.z)
