@@ -1,5 +1,20 @@
 import SwiftUI
 
+enum BCFPriority: String, CaseIterable, Identifiable {
+    case low = "Low"
+    case normal = "Normal"
+    case high = "High"
+    case critical = "Critical"
+    var id: Self { self }
+}
+
+enum BCFStatus: String, CaseIterable, Identifiable {
+    case open = "Open"
+    case inProgress = "In Progress"
+    case closed = "Closed"
+    var id: Self { self }
+}
+
 struct ShareSheet: UIViewControllerRepresentable {
     let items: [Any]
     func makeUIViewController(context: Context) -> UIActivityViewController {
@@ -17,8 +32,8 @@ struct ContentView: View {
     @State private var showBCFList = false
     @State private var bcfTitle = ""
     @State private var bcfDescription = ""
-    @State private var bcfPriority = "Normal"
-    @State private var bcfStatus = "Open"
+    @State private var bcfPriority: BCFPriority = .normal
+    @State private var bcfStatus: BCFStatus = .open
     @State private var bcfAssignee = ""
     @State private var exportURLs: [URL] = []
     @State private var capturedSnapshot: UIImage?
@@ -567,8 +582,8 @@ struct ContentView: View {
         bcfElementIfcType = element?.ifcType
         bcfTitle = ""
         bcfDescription = ""
-        bcfPriority = "Normal"
-        bcfStatus = "Open"
+        bcfPriority = .normal
+        bcfStatus = .open
         bcfAssignee = ""
 
         // Capture snapshot + viewpoint before showing the sheet
@@ -580,7 +595,7 @@ struct ContentView: View {
     }
 
     private var bcfFormSheet: some View {
-        NavigationView {
+        NavigationStack {
             Form {
                 Section("Issue Details") {
                     TextField("Title", text: $bcfTitle)
@@ -589,13 +604,15 @@ struct ContentView: View {
                 }
                 Section("Classification") {
                     Picker("Priority", selection: $bcfPriority) {
-                        ForEach(["Low", "Normal", "High", "Critical"], id: \.self) { Text($0) }
+                        ForEach(BCFPriority.allCases) { priority in
+                            Text(priority.rawValue).tag(priority)
+                        }
                     }
-                    .pickerStyle(.menu)
                     Picker("Status", selection: $bcfStatus) {
-                        ForEach(["Open", "In Progress", "Closed"], id: \.self) { Text($0) }
+                        ForEach(BCFStatus.allCases) { status in
+                            Text(status.rawValue).tag(status)
+                        }
                     }
-                    .pickerStyle(.menu)
                     TextField("Assignee", text: $bcfAssignee)
                 }
                 if bcfElementGlobalId != nil {
@@ -629,8 +646,8 @@ struct ContentView: View {
         let issue = BCFIssue(
             title: bcfTitle,
             description: bcfDescription,
-            priority: bcfPriority,
-            status: bcfStatus,
+            priority: bcfPriority.rawValue,
+            status: bcfStatus.rawValue,
             assignee: bcfAssignee,
             author: UIDevice.current.name,
             cameraPosition: viewpoint.position,
@@ -685,7 +702,7 @@ struct ContentView: View {
     }
 
     private var hiddenElementsSheet: some View {
-        NavigationView {
+        NavigationStack {
             List {
                 ForEach(arManager.hiddenElements) { element in
                     HStack {
@@ -722,7 +739,7 @@ struct ContentView: View {
     }
 
     private var bcfListSheet: some View {
-        NavigationView {
+        NavigationStack {
             List {
                 ForEach(Array(arManager.bcfIssues.enumerated()), id: \.offset) { index, issue in
                     HStack(spacing: 12) {
