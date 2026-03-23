@@ -12,6 +12,7 @@ struct ContentView: View {
     @StateObject private var arManager = ARSessionManager()
     @State private var showDebugLog = false
     @State private var showFixturePicker = false
+    @State private var showOpacitySlider = false
     @State private var showBCFSheet = false
     @State private var showBCFList = false
     @State private var bcfTitle = ""
@@ -281,6 +282,16 @@ struct ContentView: View {
                             }
                         }
 
+                        if [.roomPlaced, .wallStart, .wallEnd, .wallAdjust, .done].contains(arManager.state) {
+                            Button(action: { showOpacitySlider.toggle() }) {
+                                Image(systemName: "eye")
+                                    .font(.title3)
+                                    .padding(10)
+                                    .background(.ultraThinMaterial, in: Circle())
+                                    .foregroundStyle(showOpacitySlider ? .blue : .secondary)
+                            }
+                        }
+
                         Button(action: { showDebugLog.toggle() }) {
                             Image(systemName: "ladybug")
                                 .font(.title3)
@@ -427,6 +438,29 @@ struct ContentView: View {
             // Fixture sidebar
             if arManager.state == .roomPlaced && arManager.selectedElement == nil {
                 fixtureSidebar
+            }
+
+            // Opacity slider (vertical, right side)
+            if showOpacitySlider {
+                HStack {
+                    Spacer()
+                    VStack(spacing: 4) {
+                        Text(String(format: "%.0f%%", arManager.modelOpacity * 100))
+                            .font(.system(size: 11, design: .monospaced))
+                        Slider(value: $arManager.modelOpacity, in: 0.1...1.0)
+                            .frame(width: 150)
+                            .rotationEffect(.degrees(-90))
+                            .frame(width: 30, height: 150)
+                        Image(systemName: "eye")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(.vertical, 12)
+                    .padding(.horizontal, 8)
+                    .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16))
+                    .padding(.trailing, 8)
+                }
+                .frame(maxHeight: .infinity, alignment: .center)
             }
 
             // Floating bubble action menu

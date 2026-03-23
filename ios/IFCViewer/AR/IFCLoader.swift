@@ -160,6 +160,7 @@ enum IFCLoader {
                 )
                 material.metallic = .init(floatLiteral: 0.0)
                 material.roughness = .init(floatLiteral: 0.8)
+                material.blending = .transparent(opacity: .init(floatLiteral: 0.9))
 
                 let entity = ModelEntity(mesh: mesh, materials: [material])
                 entity.name = "ifc_\(elem.id)"

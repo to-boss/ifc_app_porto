@@ -54,6 +54,9 @@ class ARSessionManager: ObservableObject {
     @Published var showingDetails: Bool = false
     @Published var exportFileURL: URL?
     @Published var bcfIssues: [BCFIssue] = []
+    @Published var modelOpacity: Float = 0.9 {
+        didSet { applyModelOpacity() }
+    }
     @Published var wallHeight: Float = 2.5 {
         didSet { regenerateWallPreview() }
     }
@@ -697,6 +700,23 @@ class ARSessionManager: ObservableObject {
         anchor.position.y = floorHeightOffset
     }
 
+    private func applyModelOpacity() {
+        func applyToEntity(_ entity: Entity) {
+            if let model = entity as? ModelEntity, var comp = model.model {
+                comp.materials = comp.materials.map { mat in
+                    guard var pbr = mat as? PhysicallyBasedMaterial else { return mat }
+                    pbr.blending = .transparent(opacity: .init(floatLiteral: modelOpacity))
+                    return pbr
+                }
+                model.model = comp
+            }
+            for child in entity.children { applyToEntity(child) }
+        }
+        if let room = roomEntity { applyToEntity(room) }
+        for wall in createdWalls { applyToEntity(wall.anchor) }
+        for fixture in placedFixtures { applyToEntity(fixture.anchor) }
+    }
+
     func confirmHeight() {
         guard state == .heightAdjust else { return }
         applyHeightOffset()
@@ -1276,6 +1296,11 @@ class ARSessionManager: ObservableObject {
         material.roughness = .init(floatLiteral: 0.8)
         entity.model?.materials = [material]
 
+        // Re-apply collision after material change so tap selection works
+        if let mesh = entity.model?.mesh {
+            entity.collision = CollisionComponent(shapes: [ShapeResource.generateConvex(from: mesh)])
+        }
+
         // Register for tap-to-inspect
         wallIdCounter += 1
         let wallId = wallIdCounter
@@ -1343,10 +1368,10 @@ class ARSessionManager: ObservableObject {
         }
 
         guard let roomAnchor = roomAnchor else { return }
-        let roomPos = roomAnchor.position
+        let roomPos = roomAnchor.position(relativeTo: nil)
         log(String(format: "[Y-DEBUG] wall: groundY=%.4f, roomPos.y=%.4f, startPt.y=%.4f, endPt.y=%.4f", groundY, roomPos.y, startPt.y, endPt.y))
 
-        // Compute wall coordinates relative to room anchor
+        // Compute wall coordinates relative to room anchor (world space)
         let relStartX = startPt.x - roomPos.x
         let relStartZ = startPt.z - roomPos.z
         let relEndX = endPt.x - roomPos.x
@@ -1437,7 +1462,7 @@ class ARSessionManager: ObservableObject {
 
         // Build fixture inputs
         var fixtureInputs: [FixtureExportInput] = []
-        let roomPos = roomAnchor.position
+        let roomPos = roomAnchor.position(relativeTo: nil)
 
         log("placedFixtures count: \(placedFixtures.count)")
         for fixture in placedFixtures {
@@ -1447,8 +1472,8 @@ class ARSessionManager: ObservableObject {
                 continue
             }
 
-            // Get fixture position relative to room
-            let pos = fixture.anchor.position
+            // Get fixture position relative to room (world space)
+            let pos = fixture.anchor.position(relativeTo: nil)
             let relX = pos.x - roomPos.x
             let relY = pos.y - roomPos.y
             let relZ = pos.z - roomPos.z
