@@ -84,10 +84,6 @@ struct FloorPlanView: View {
                         headPath.move(to: arrowEnd)
                         headPath.addLine(to: right)
                         context.stroke(headPath, with: .color(.orange), lineWidth: 3)
-
-                        // Handle dot
-                        let dotRect = CGRect(x: arrowEnd.x - 8, y: arrowEnd.y - 8, width: 16, height: 16)
-                        context.fill(Path(ellipseIn: dotRect), with: .color(.orange))
                     }
                 }
                 .rotationEffect(Angle(radians: Double(canvasRotation)))

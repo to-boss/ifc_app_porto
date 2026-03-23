@@ -8,6 +8,7 @@ private let logger = Logger(subsystem: "com.ifcar.viewer", category: "ARSession"
 
 enum ARState {
     case coaching
+    case filePicking       // choose which IFC room file to load
     case loading           // loading room IFC + extracting floor plan
     case floorPlanPicking  // 2D floor plan overlay, pick edge + direction
     case edgeAligning      // centroid marker follows camera, Place button locks points
@@ -20,13 +21,13 @@ enum ARState {
     case wallStart         // centroid marker follows camera, waiting for Place
     case wallEnd           // live 3D wall preview, endpoint follows camera
     case wallAdjust        // both points locked, sliders for height/width
-    case elementMoving     // moving a room element within its parent
     case done              // all models placed
 }
 
 @MainActor
 class ARSessionManager: ObservableObject {
     @Published var state: ARState = .coaching
+    @Published var selectedRoomFile: String = "BaseRoom-v2"
     @Published var loadingError: String?
     @Published var debugLog: [String] = []
     @Published var modelScale: Float = 1.0 {
@@ -115,9 +116,11 @@ class ARSessionManager: ObservableObject {
     private var selectedEntityRef: Entity?
     private var selectedOriginalMaterials: [(ModelEntity, [Material])] = []
 
-    // Element moving (room elements)
-    private var movingEntity: Entity?
-    private var movingOriginalPosition: SIMD3<Float>?
+    // Room element moving (reuses fixturePreviewing flow)
+    var movingRoomElement: Bool = false
+    private var movingRoomOriginalPosition: SIMD3<Float>?    // entity local pos before move
+    private var movingMeshCenter: SIMD3<Float>?              // mesh center for rotation pivot compensation
+    private var previewDebugCount: Int = 0
     private var deletedElementIds: Set<UInt64> = []
     private var movedElementOffsets: [UInt64: SIMD3<Float>] = [:]
 
@@ -154,9 +157,15 @@ class ARSessionManager: ObservableObject {
 
     func coachingDidFinish() {
         if state == .coaching {
-            state = .loading
-            loadAndExtractFloorPlan()
+            state = .filePicking
         }
+    }
+
+    func selectRoomFile(_ name: String) {
+        guard state == .filePicking else { return }
+        selectedRoomFile = name
+        state = .loading
+        loadAndExtractFloorPlan()
     }
 
     // MARK: - Plane Detection
@@ -202,8 +211,7 @@ class ARSessionManager: ObservableObject {
 
         // Floor detected — coaching overlay can dismiss now
         if state == .coaching {
-            state = .loading
-            loadAndExtractFloorPlan()
+            state = .filePicking
         }
     }
 
@@ -318,12 +326,13 @@ class ARSessionManager: ObservableObject {
         Task.detached {
             do {
                 // Parse IFC
-                let elements = try await IFCLoader.parseAndValidate(named: "BaseRoom-v2")
+                let roomFile = await self.selectedRoomFile
+                let elements = try await IFCLoader.parseAndValidate(named: roomFile)
 
                 // Extract floor plan
-                guard let url = Bundle.main.url(forResource: "BaseRoom-v2", withExtension: "ifc"),
+                guard let url = Bundle.main.url(forResource: roomFile, withExtension: "ifc"),
                       let ifcData = try? Data(contentsOf: url) else {
-                    throw IFCLoaderError.bundleFileNotFound("BaseRoom-v2")
+                    throw IFCLoaderError.bundleFileNotFound(roomFile)
                 }
                 let plan = try extractFloorPlan(data: ifcData)
 
@@ -496,12 +505,31 @@ class ARSessionManager: ObservableObject {
         // So to map mAngle to rAngle: mAngle - θ = rAngle → θ = mAngle - rAngle
         var rotation = mAngle - rAngle
 
-        // Arrow offset from perpendicular determines which side user is on
-        let perpAngle = mAngle + .pi / 2
-        let arrowOffset = edgeArrowAngle - perpAngle
-        let normalizedOffset = atan2(sin(arrowOffset), cos(arrowOffset))
-        if abs(normalizedOffset) > .pi / 2 {
-            rotation += .pi
+        // Use camera position to determine which side of the wall the user is on,
+        // then ensure the arrow's "inside" direction maps to the user's side after rotation.
+        let rMidX = (r1.x + r2.x) / 2
+        let rMidZ = (r1.z + r2.z) / 2
+        if let camPos = arView?.cameraTransform.translation {
+            let camDirX = camPos.x - rMidX
+            let camDirZ = camPos.z - rMidZ
+            let userSideAngle = atan2(camDirZ, camDirX)
+
+            // Transform arrow direction from model space to real space
+            let realArrowDir = edgeArrowAngle - rotation
+            let diff = atan2(sin(realArrowDir - userSideAngle), cos(realArrowDir - userSideAngle))
+            if abs(diff) < .pi / 2 {
+                rotation += .pi
+            }
+            log(String(format: "ALIGN: cam-based flip check: arrowReal=%.1f° userSide=%.1f° diff=%.1f° flip=%d",
+                        realArrowDir * 180 / .pi, userSideAngle * 180 / .pi, diff * 180 / .pi, abs(diff) < .pi / 2 ? 1 : 0))
+        } else {
+            // Fallback: use old perpendicular check if camera unavailable
+            let perpAngle = mAngle + .pi / 2
+            let arrowOffset = edgeArrowAngle - perpAngle
+            let normalizedOffset = atan2(sin(arrowOffset), cos(arrowOffset))
+            if abs(normalizedOffset) > .pi / 2 {
+                rotation += .pi
+            }
         }
         computedRotation = rotation
 
@@ -974,15 +1002,23 @@ class ARSessionManager: ObservableObject {
             if let hit = floorHitPoint(from: aimPoint) {
                 previewAnchor?.position = hit
             }
-        }
-
-        // Element moving: update position within room
-        if state == .elementMoving, let entity = movingEntity, let roomEnt = roomEntity {
-            if let hit = floorHitPoint(from: aimPoint) {
-                let localPos = roomEnt.convert(position: hit, from: nil)
-                entity.position = localPos
+            // Debug logging for room element moves (first 3 frames only)
+            if movingRoomElement, let entity = previewEntity, let anchor = previewAnchor, previewDebugCount < 3 {
+                previewDebugCount += 1
+                let wb = entity.visualBounds(relativeTo: nil)
+                let cam = arView.cameraTransform.translation
+                let fwd = arView.cameraTransform.matrix.columns.2
+                let floorHit = floorHitPoint(from: aimPoint)
+                log(String(format: "[PREVIEW-%d] anchor=(%.2f,%.2f,%.2f) worldBnds=(%.1f,%.1f,%.1f)→(%.1f,%.1f,%.1f) cam.y=%.2f dir.y=%.2f floorHit=%@",
+                    previewDebugCount,
+                    anchor.position.x, anchor.position.y, anchor.position.z,
+                    wb.min.x, wb.min.y, wb.min.z, wb.max.x, wb.max.y, wb.max.z,
+                    cam.y, fwd.y,
+                    floorHit.map { String(format: "(%.2f,%.2f,%.2f)", $0.x, $0.y, $0.z) } ?? "nil"))
             }
         }
+
+        // Room element moving is now handled via fixturePreviewing above
 
         // Edge alignment: move centroid marker + update live line
         if state == .edgeAligning {
@@ -1054,25 +1090,78 @@ class ARSessionManager: ObservableObject {
     }
 
     private func applyPreviewTransform() {
-        previewEntity?.scale = SIMD3<Float>(repeating: modelScale)
-        previewEntity?.position.y = -fixtureMinY * modelScale
-        previewEntity?.orientation = simd_quatf(angle: computedRotation + modelRotation, axis: SIMD3(0, 1, 0))
+        guard let entity = previewEntity else { return }
+        let rot = computedRotation + modelRotation
+        entity.scale = SIMD3<Float>(repeating: modelScale)
+        entity.orientation = simd_quatf(angle: rot, axis: SIMD3(0, 1, 0))
+
+        if movingRoomElement, let mc = movingMeshCenter {
+            // Compensate for mesh center offset: after rotation, the mesh center orbits
+            // around entity origin. Counter-offset so mesh center stays at anchor position.
+            let cosR = cos(rot), sinR = sin(rot)
+            let cx = mc.x * modelScale, cz = mc.z * modelScale
+            entity.position = SIMD3<Float>(
+                -(cx * cosR + cz * sinR),
+                -fixtureMinY * modelScale,
+                -(-cx * sinR + cz * cosR)
+            )
+        } else {
+            entity.position.y = -fixtureMinY * modelScale
+        }
     }
 
     func placeFixture() {
         guard state == .fixturePreviewing, let anchor = previewAnchor else { return }
 
-        // Restore original opaque materials for the fixture
+        // Restore original opaque materials
         IFCLoader.restoreMaterials(originalMaterials)
         originalMaterials = []
 
-        let filename = pendingFixtureFilename ?? "unknown"
-        placedFixtures.append(PlacedFixture(anchor: anchor, filename: filename))
-        pendingFixtureFilename = nil
+        if movingRoomElement, let entity = previewEntity, let roomEnt = roomEntity {
+            // Room element: reparent back to roomEntity
+            // Capture world-space visual center while entity is still in preview anchor
+            let worldCenter = entity.visualBounds(relativeTo: nil).center
+
+            entity.removeFromParent()
+            arView?.scene.removeAnchor(anchor)
+
+            // Reset to identity (roomEntity provides scale/rotation)
+            entity.scale = .one
+            entity.orientation = simd_quatf(ix: 0, iy: 0, iz: 0, r: 1)
+
+            // Mesh center in entity-local coords (now with identity transform)
+            let meshCenterLocal = entity.visualBounds(relativeTo: entity).center
+
+            // Convert world center to roomEntity-local, then offset so mesh center lands there
+            let localCenter = roomEnt.convert(position: worldCenter, from: nil)
+            entity.position = localCenter - meshCenterLocal
+            roomEnt.addChild(entity)
+
+            // Regenerate collision shape so tap detection works at new position
+            if let model = entity as? ModelEntity, let mesh = model.model?.mesh {
+                model.collision = CollisionComponent(shapes: [ShapeResource.generateConvex(from: mesh)])
+            }
+
+            // Record offset for export
+            if let orig = movingRoomOriginalPosition,
+               let idStr = entity.name.split(separator: "_").last, let id = UInt64(idStr) {
+                movedElementOffsets[id, default: .zero] += entity.position - orig
+            }
+
+            movingRoomElement = false
+            movingRoomOriginalPosition = nil
+            movingMeshCenter = nil
+            log("Room element placed at \(anchor.position)")
+        } else {
+            // Normal fixture
+            let filename = pendingFixtureFilename ?? "unknown"
+            placedFixtures.append(PlacedFixture(anchor: anchor, filename: filename))
+            pendingFixtureFilename = nil
+            log("Fixture placed at \(anchor.position)")
+        }
+
         previewAnchor = nil
         previewEntity = nil
-
-        log("Fixture placed at \(anchor.position)")
         state = .roomPlaced
     }
 
@@ -1091,19 +1180,74 @@ class ARSessionManager: ObservableObject {
         selectedOriginalMaterials = []
 
         if info.isRoomElement {
-            // Move within room: change local position
+            // Set up room element exactly like a fixture so preview/move/rotate all work the same
             let entity = info.entity
-            movingEntity = entity
-            movingOriginalPosition = entity.position
+            guard let roomEnt = roomEntity, let arView = arView else { return }
 
+            movingRoomElement = true
+            movingRoomOriginalPosition = entity.position
+            previewDebugCount = 0
+
+            // Capture world-space bounds before reparenting
+            let worldBounds = entity.visualBounds(relativeTo: nil)
+            let worldCenter = worldBounds.center
+            let worldMinY = worldBounds.min.y
+
+            // Compute local mesh bounds for fixtureMinY (entity-relative, before transform reset)
+            let localBounds = entity.visualBounds(relativeTo: entity)
+            fixtureMinY = localBounds.min.y
+
+            // Extract room's current Y-rotation
+            let q = roomEnt.orientation
+            let roomYRotation = atan2(2 * (q.vector.w * q.vector.y + q.vector.x * q.vector.z),
+                                      1 - 2 * (q.vector.y * q.vector.y + q.vector.z * q.vector.z))
+
+            // Reparent: remove from room, attach to new anchor
+            entity.removeFromParent()
+
+            // Store mesh center for rotation pivot compensation in applyPreviewTransform
+            let meshCenter = localBounds.center
+            movingMeshCenter = meshCenter
+
+            // Reset entity to identity transform
+            entity.scale = .one
+            entity.orientation = .init(ix: 0, iy: 0, iz: 0, r: 1)
+            entity.position = SIMD3<Float>(0, -fixtureMinY, 0)
+
+            // Place anchor at world-space bottom-center (floor level under element)
+            // Use world: .zero so .position IS the world position (same as fixtures)
+            let anchorPos = SIMD3<Float>(worldCenter.x, worldMinY, worldCenter.z)
+            let anchor = AnchorEntity(world: .zero)
+            anchor.position = anchorPos
+            anchor.addChild(entity)
+            arView.scene.addAnchor(anchor)
+
+            // Collect materials + apply ghost (entity itself + children)
+            originalMaterials = IFCLoader.collectMaterials(from: entity)
+            if let model = entity as? ModelEntity, let mats = model.model?.materials {
+                originalMaterials.insert((model, mats), at: 0)
+            }
             if let model = entity as? ModelEntity {
-                originalMaterials = [(model, model.model?.materials ?? [])]
+                var ghost = PhysicallyBasedMaterial()
+                ghost.baseColor = .init(tint: UIColor(red: 0.6, green: 0.85, blue: 1.0, alpha: 1.0))
+                ghost.blending = .transparent(opacity: .init(floatLiteral: 0.65))
+                ghost.metallic = .init(floatLiteral: 0.1)
+                ghost.roughness = .init(floatLiteral: 0.5)
+                model.model?.materials = model.model?.materials.map { _ in ghost as Material } ?? []
             }
             IFCLoader.applyGhostEffect(to: entity)
 
+            previewAnchor = anchor
+            previewEntity = entity
+            modelScale = roomEnt.scale.x  // inherit room scale
+            modelRotation = 0  // computedRotation already captures room orientation
             selectedElement = nil
             selectedEntityRef = nil
-            state = .elementMoving
+            state = .fixturePreviewing
+            log(String(format: "[MOVE-DEBUG] worldCenter=(%.2f,%.2f,%.2f) worldMinY=%.2f", worldCenter.x, worldCenter.y, worldCenter.z, worldMinY))
+            log(String(format: "[MOVE-DEBUG] meshCenter=(%.2f,%.2f,%.2f) fixtureMinY=%.2f", meshCenter.x, meshCenter.y, meshCenter.z, fixtureMinY))
+            log(String(format: "[MOVE-DEBUG] anchorPos=(%.2f,%.2f,%.2f) entityPos=(%.2f,%.2f,%.2f)", anchorPos.x, anchorPos.y, anchorPos.z, entity.position.x, entity.position.y, entity.position.z))
+            log(String(format: "[MOVE-DEBUG] modelScale=%.3f computedRot=%.1f° groundY=%.3f", modelScale, computedRotation * 180 / .pi, groundY))
             log("Moving room element \(info.ifcType) #\(info.id)")
         } else {
             // Fixture/wall: move the whole anchor
@@ -1131,32 +1275,28 @@ class ARSessionManager: ObservableObject {
         }
     }
 
-    func placeMovingElement() {
-        guard state == .elementMoving, let entity = movingEntity, let orig = movingOriginalPosition else { return }
-
-        // Record cumulative move offset
-        if let idStr = entity.name.split(separator: "_").last, let id = UInt64(idStr) {
-            let delta = entity.position - orig
-            movedElementOffsets[id, default: .zero] += delta
-        }
+    func cancelRoomElementMove() {
+        guard movingRoomElement, let entity = previewEntity, let anchor = previewAnchor,
+              let roomEnt = roomEntity, let orig = movingRoomOriginalPosition else { return }
 
         IFCLoader.restoreMaterials(originalMaterials)
         originalMaterials = []
-        movingEntity = nil
-        movingOriginalPosition = nil
-        state = .roomPlaced
-        log("Element placed")
-    }
 
-    func cancelMovingElement() {
-        guard let entity = movingEntity, let orig = movingOriginalPosition else { return }
+        // Reparent back to roomEntity at original position
+        entity.removeFromParent()
+        arView?.scene.removeAnchor(anchor)
+        entity.scale = .one
+        entity.orientation = simd_quatf(ix: 0, iy: 0, iz: 0, r: 1)
         entity.position = orig
-        IFCLoader.restoreMaterials(originalMaterials)
-        originalMaterials = []
-        movingEntity = nil
-        movingOriginalPosition = nil
+        roomEnt.addChild(entity)
+
+        movingRoomElement = false
+        movingRoomOriginalPosition = nil
+        movingMeshCenter = nil
+        previewAnchor = nil
+        previewEntity = nil
         state = .roomPlaced
-        log("Move cancelled")
+        log("Room element move cancelled")
     }
 
     func showDetails() {
@@ -1606,12 +1746,9 @@ class ARSessionManager: ObservableObject {
         modelScale = 1.0
         modelRotation = 0
 
-        // Clear element moving state
-        if let entity = movingEntity, let orig = movingOriginalPosition {
-            entity.position = orig
-        }
-        movingEntity = nil
-        movingOriginalPosition = nil
+        // Clear room element moving state
+        movingRoomElement = false
+        movingRoomOriginalPosition = nil
         deletedElementIds.removeAll()
         movedElementOffsets.removeAll()
 

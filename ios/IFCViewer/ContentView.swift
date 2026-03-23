@@ -33,11 +33,23 @@ struct ContentView: View {
                 .ignoresSafeArea()
 
             VStack {
-                // Step-by-step guide card
-                if arManager.state != .coaching {
-                    guideCard
-                        .padding(.horizontal, 20)
-                        .padding(.top, 12)
+                // Step-by-step guide card + opacity toggle
+                if arManager.state != .coaching && arManager.state != .filePicking {
+                    HStack(alignment: .top) {
+                        guideCard
+
+                        if [.roomPlaced, .wallStart, .wallEnd, .wallAdjust, .done].contains(arManager.state) {
+                            Button(action: { showOpacitySlider.toggle() }) {
+                                Image(systemName: "eye")
+                                    .font(.title3)
+                                    .padding(10)
+                                    .background(.ultraThinMaterial, in: Circle())
+                                    .foregroundStyle(showOpacitySlider ? .blue : .secondary)
+                            }
+                        }
+                    }
+                    .padding(.horizontal, 20)
+                    .padding(.top, 12)
                 }
 
                 Spacer()
@@ -172,14 +184,25 @@ struct ContentView: View {
                                 .foregroundStyle(.white)
                         }
                     } else if arManager.state == .fixturePreviewing {
-                        Button(action: { arManager.placeFixture() }) {
-                            Label("Place Fixture", systemImage: "checkmark.circle.fill")
-                                .font(.subheadline)
-                                .fontWeight(.semibold)
-                                .padding(.horizontal, 20)
-                                .padding(.vertical, 12)
-                                .background(.green.opacity(0.85), in: Capsule())
-                                .foregroundStyle(.white)
+                        HStack(spacing: 12) {
+                            Button(action: { arManager.placeFixture() }) {
+                                Label(arManager.movingRoomElement ? "Place" : "Place Fixture", systemImage: "checkmark.circle.fill")
+                                    .font(.subheadline)
+                                    .fontWeight(.semibold)
+                                    .padding(.horizontal, 20)
+                                    .padding(.vertical, 12)
+                                    .background(.green.opacity(0.85), in: Capsule())
+                                    .foregroundStyle(.white)
+                            }
+                            if arManager.movingRoomElement {
+                                Button(action: { arManager.cancelRoomElementMove() }) {
+                                    Label("Cancel", systemImage: "xmark")
+                                        .font(.subheadline)
+                                        .padding(.horizontal, 16)
+                                        .padding(.vertical, 12)
+                                        .background(.ultraThinMaterial, in: Capsule())
+                                }
+                            }
                         }
                     } else if arManager.state == .wallStart || arManager.state == .wallEnd {
                         HStack(spacing: 12) {
@@ -225,25 +248,6 @@ struct ContentView: View {
                                     .background(.ultraThinMaterial, in: Capsule())
                             }
                         }
-                    } else if arManager.state == .elementMoving {
-                        HStack(spacing: 12) {
-                            Button(action: { arManager.placeMovingElement() }) {
-                                Label("Place", systemImage: "checkmark.circle.fill")
-                                    .font(.subheadline)
-                                    .fontWeight(.semibold)
-                                    .padding(.horizontal, 20)
-                                    .padding(.vertical, 12)
-                                    .background(.green.opacity(0.85), in: Capsule())
-                                    .foregroundStyle(.white)
-                            }
-                            Button(action: { arManager.cancelMovingElement() }) {
-                                Label("Cancel", systemImage: "xmark")
-                                    .font(.subheadline)
-                                    .padding(.horizontal, 16)
-                                    .padding(.vertical, 12)
-                                    .background(.ultraThinMaterial, in: Capsule())
-                            }
-                        }
                     } else if arManager.state == .roomPlaced {
                         Button(action: { arManager.finishSession() }) {
                             Label("Done", systemImage: "checkmark.seal.fill")
@@ -263,7 +267,7 @@ struct ContentView: View {
 
                     // Secondary actions (right)
                     HStack(spacing: 10) {
-                        if [.floorPlanPicking, .edgeAligning, .scaleConfirmation, .heightAdjust, .fixturePreviewing, .roomPlaced, .wallStart, .wallEnd, .wallAdjust, .elementMoving, .done].contains(arManager.state) {
+                        if [.floorPlanPicking, .edgeAligning, .scaleConfirmation, .heightAdjust, .fixturePreviewing, .roomPlaced, .wallStart, .wallEnd, .wallAdjust, .done].contains(arManager.state) {
                             Button(action: { arManager.reset() }) {
                                 Image(systemName: "arrow.counterclockwise")
                                     .font(.title3)
@@ -282,15 +286,6 @@ struct ContentView: View {
                             }
                         }
 
-                        if [.roomPlaced, .wallStart, .wallEnd, .wallAdjust, .done].contains(arManager.state) {
-                            Button(action: { showOpacitySlider.toggle() }) {
-                                Image(systemName: "eye")
-                                    .font(.title3)
-                                    .padding(10)
-                                    .background(.ultraThinMaterial, in: Circle())
-                                    .foregroundStyle(showOpacitySlider ? .blue : .secondary)
-                            }
-                        }
 
                         Button(action: { showDebugLog.toggle() }) {
                             Image(systemName: "ladybug")
@@ -374,6 +369,67 @@ struct ContentView: View {
                     .padding(.trailing, 8)
                 }
                 .frame(maxHeight: .infinity, alignment: .center)
+            }
+
+            // File picker overlay
+            if arManager.state == .filePicking {
+                VStack(spacing: 16) {
+                    Text("Select IFC File")
+                        .font(.headline)
+                        .foregroundStyle(.white)
+                    Button {
+                        arManager.selectRoomFile("BaseRoom-v2")
+                    } label: {
+                        Text("BaseRoom-v2 (Interior)")
+                            .frame(maxWidth: .infinity)
+                            .padding()
+                            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
+                    }
+                    Button {
+                        arManager.selectRoomFile("test_exterior")
+                    } label: {
+                        Text("test_exterior (Exterior)")
+                            .frame(maxWidth: .infinity)
+                            .padding()
+                            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
+                    }
+                    Button {
+                        arManager.selectRoomFile("BaseRoom_v4-big")
+                    } label: {
+                        Text("BaseRoom v4 Big")
+                            .frame(maxWidth: .infinity)
+                            .padding()
+                            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
+                    }
+                    Button {
+                        arManager.selectRoomFile("BaseRoom_v4-small")
+                    } label: {
+                        Text("BaseRoom v4 Small")
+                            .frame(maxWidth: .infinity)
+                            .padding()
+                            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
+                    }
+                    Button {
+                        arManager.selectRoomFile("BaseRoom-v5")
+                    } label: {
+                        Text("BaseRoom v5")
+                            .frame(maxWidth: .infinity)
+                            .padding()
+                            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
+                    }
+                    Button {
+                        arManager.selectRoomFile("BaseRoom-v6")
+                    } label: {
+                        Text("BaseRoom v6")
+                            .frame(maxWidth: .infinity)
+                            .padding()
+                            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
+                    }
+                }
+                .padding(24)
+                .background(.black.opacity(0.6), in: RoundedRectangle(cornerRadius: 20))
+                .padding(40)
+                .transition(.opacity)
             }
 
             // Floor plan picker overlay
@@ -729,7 +785,7 @@ struct ContentView: View {
                 stepLine(done: isStepDone(3))
                 stepDot(step: 4, active: arManager.state == .heightAdjust)
                 stepLine(done: isStepDone(4))
-                stepDot(step: 5, active: [.roomPlaced, .fixtureLoading, .fixturePreviewing, .wallStart, .wallEnd, .wallAdjust, .elementMoving, .done].contains(arManager.state))
+                stepDot(step: 5, active: [.roomPlaced, .fixtureLoading, .fixturePreviewing, .wallStart, .wallEnd, .wallAdjust, .done].contains(arManager.state))
             }
 
             // Current instruction
@@ -748,6 +804,8 @@ struct ContentView: View {
 
     private var guideTitle: String {
         switch arManager.state {
+        case .filePicking:
+            return ""
         case .coaching:
             return ""
         case .loading:
@@ -774,8 +832,6 @@ struct ContentView: View {
             return "Place wall end"
         case .wallAdjust:
             return "Adjust wall"
-        case .elementMoving:
-            return "Move element"
         case .done:
             return "Complete"
         }
@@ -783,6 +839,8 @@ struct ContentView: View {
 
     private var guideDetail: String {
         switch arManager.state {
+        case .filePicking:
+            return ""
         case .coaching:
             return ""
         case .loading:
@@ -819,8 +877,6 @@ struct ContentView: View {
             return "Move to extend the wall. Tap Place to set the endpoint."
         case .wallAdjust:
             return "Use sliders to set height and width, then Confirm."
-        case .elementMoving:
-            return "Move your device to reposition the element. Tap Place to confirm."
         case .done:
             return "All models placed. Tap Reset to start over."
         }
@@ -852,7 +908,7 @@ struct ContentView: View {
     }
 
     private func isStepDone(_ step: Int) -> Bool {
-        let laterStates: Set<ARState> = [.roomPlaced, .fixtureLoading, .fixturePreviewing, .wallStart, .wallEnd, .wallAdjust, .elementMoving, .done]
+        let laterStates: Set<ARState> = [.roomPlaced, .fixtureLoading, .fixturePreviewing, .wallStart, .wallEnd, .wallAdjust, .done]
         switch step {
         case 1: // Load
             return [.floorPlanPicking, .edgeAligning, .scaleConfirmation, .floorSetting, .heightAdjust].contains(arManager.state) || laterStates.contains(arManager.state)

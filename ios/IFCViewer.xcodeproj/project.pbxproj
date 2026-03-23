@@ -17,6 +17,11 @@
 		AA111111111111111111AAA1 /* BaseRoom-v2.ifc in Resources */ = {isa = PBXBuildFile; fileRef = AA222222222222222222AAA2 /* BaseRoom-v2.ifc */; };
 		AA333333333333333333AAA3 /* Objekt_Waschbecken.ifc in Resources */ = {isa = PBXBuildFile; fileRef = AA444444444444444444AAA4 /* Objekt_Waschbecken.ifc */; };
 		AA555555555555555555AAA5 /* Objekt_WC_Beh_.ifc in Resources */ = {isa = PBXBuildFile; fileRef = AA666666666666666666AAA6 /* Objekt_WC_Beh_.ifc */; };
+		BB111111111111111111BBB1 /* test_exterior.ifc in Resources */ = {isa = PBXBuildFile; fileRef = BB222222222222222222BBB2 /* test_exterior.ifc */; };
+		CC111111111111111111CCC1 /* BaseRoom_v4-big.ifc in Resources */ = {isa = PBXBuildFile; fileRef = CC222222222222222222CCC2 /* BaseRoom_v4-big.ifc */; };
+		DD111111111111111111DDD1 /* BaseRoom_v4-small.ifc in Resources */ = {isa = PBXBuildFile; fileRef = DD222222222222222222DDD2 /* BaseRoom_v4-small.ifc */; };
+		EE111111111111111111EEE1 /* BaseRoom-v5.ifc in Resources */ = {isa = PBXBuildFile; fileRef = EE222222222222222222EEE2 /* BaseRoom-v5.ifc */; };
+		FF111111111111111111FFF1 /* BaseRoom-v6.ifc in Resources */ = {isa = PBXBuildFile; fileRef = FF222222222222222222FFF2 /* BaseRoom-v6.ifc */; };
 		D5E417124EE076B89C823EBA /* IFCLoader.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6B151DED304A69F779A5CED0 /* IFCLoader.swift */; };
 		BCF11111111111111111BCF1 /* BCFExporter.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCF22222222222222222BCF2 /* BCFExporter.swift */; };
 		FP111111111111111111FP11 /* FloorPlanView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FP222222222222222222FP22 /* FloorPlanView.swift */; };
@@ -35,6 +40,11 @@
 		AA222222222222222222AAA2 /* BaseRoom-v2.ifc */ = {isa = PBXFileReference; path = "BaseRoom-v2.ifc"; sourceTree = "<group>"; };
 		AA444444444444444444AAA4 /* Objekt_Waschbecken.ifc */ = {isa = PBXFileReference; path = Objekt_Waschbecken.ifc; sourceTree = "<group>"; };
 		AA666666666666666666AAA6 /* Objekt_WC_Beh_.ifc */ = {isa = PBXFileReference; path = "Objekt_WC_Beh_.ifc"; sourceTree = "<group>"; };
+		BB222222222222222222BBB2 /* test_exterior.ifc */ = {isa = PBXFileReference; path = test_exterior.ifc; sourceTree = "<group>"; };
+		CC222222222222222222CCC2 /* BaseRoom_v4-big.ifc */ = {isa = PBXFileReference; path = "BaseRoom_v4-big.ifc"; sourceTree = "<group>"; };
+		DD222222222222222222DDD2 /* BaseRoom_v4-small.ifc */ = {isa = PBXFileReference; path = "BaseRoom_v4-small.ifc"; sourceTree = "<group>"; };
+		EE222222222222222222EEE2 /* BaseRoom-v5.ifc */ = {isa = PBXFileReference; path = "BaseRoom-v5.ifc"; sourceTree = "<group>"; };
+		FF222222222222222222FFF2 /* BaseRoom-v6.ifc */ = {isa = PBXFileReference; path = "BaseRoom-v6.ifc"; sourceTree = "<group>"; };
 		FECB64B299F294F02C45073E /* ARSessionManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ARSessionManager.swift; sourceTree = "<group>"; };
 		BCF22222222222222222BCF2 /* BCFExporter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BCFExporter.swift; sourceTree = "<group>"; };
 		FP222222222222222222FP22 /* FloorPlanView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FloorPlanView.swift; sourceTree = "<group>"; };
@@ -69,6 +79,11 @@
 				BAE96894DBFDA734CEB090BB /* Objekt_WC.ifc */,
 				AA444444444444444444AAA4 /* Objekt_Waschbecken.ifc */,
 				AA666666666666666666AAA6 /* Objekt_WC_Beh_.ifc */,
+				BB222222222222222222BBB2 /* test_exterior.ifc */,
+				CC222222222222222222CCC2 /* BaseRoom_v4-big.ifc */,
+				DD222222222222222222DDD2 /* BaseRoom_v4-small.ifc */,
+				EE222222222222222222EEE2 /* BaseRoom-v5.ifc */,
+				FF222222222222222222FFF2 /* BaseRoom-v6.ifc */,
 			);
 			path = Resources;
 			sourceTree = "<group>";
@@ -175,6 +190,11 @@
 				AA111111111111111111AAA1 /* BaseRoom-v2.ifc in Resources */,
 				AA333333333333333333AAA3 /* Objekt_Waschbecken.ifc in Resources */,
 				AA555555555555555555AAA5 /* Objekt_WC_Beh_.ifc in Resources */,
+				BB111111111111111111BBB1 /* test_exterior.ifc in Resources */,
+				CC111111111111111111CCC1 /* BaseRoom_v4-big.ifc in Resources */,
+				DD111111111111111111DDD1 /* BaseRoom_v4-small.ifc in Resources */,
+				EE111111111111111111EEE1 /* BaseRoom-v5.ifc in Resources */,
+				FF111111111111111111FFF1 /* BaseRoom-v6.ifc in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
