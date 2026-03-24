@@ -237,6 +237,9 @@ class ARSessionManager: ObservableObject {
             // Screen-space hit test (forgiving) + distance filter
             let cameraPos = arView.cameraTransform.translation
             let hits = arView.entities(at: point)
+            if !hits.isEmpty {
+                log("[TAP] hits: \(hits.map { $0.name })")
+            }
 
             // Find the closest valid ifc_ entity within range
             var bestEntity: Entity?
@@ -251,8 +254,10 @@ class ARSessionManager: ObservableObject {
                        let idStr = e.name.split(separator: "_").last,
                        let id = UInt64(idStr),
                        let meta = elementMetadata[id] {
-                        let worldPos = e.position(relativeTo: nil)
-                        let dist = simd_distance(worldPos, cameraPos)
+                        // Use visual center for distance, not entity origin
+                        // (wall anchors differ from room anchor position)
+                        let visualCenter = e.visualBounds(relativeTo: nil).center
+                        let dist = simd_distance(visualCenter, cameraPos)
                         if dist < bestDist {
                             bestEntity = e
                             bestId = id
@@ -263,6 +268,18 @@ class ARSessionManager: ObservableObject {
                     }
                     current = e.parent
                 }
+            }
+            if bestEntity == nil && !hits.isEmpty {
+                var debugInfo: [String] = []
+                for h in hits {
+                    let parts = h.name.split(separator: "_")
+                    let idVal = parts.last.flatMap { UInt64($0) } ?? 0
+                    let hasMeta = elementMetadata[idVal] != nil
+                    let vc = h.visualBounds(relativeTo: nil).center
+                    let d = simd_distance(vc, cameraPos)
+                    debugInfo.append("\(h.name) meta=\(hasMeta) dist=\(String(format: "%.2f", d))")
+                }
+                log("[TAP] no selection — \(debugInfo.joined(separator: ", "))")
             }
 
             if let e = bestEntity, let meta = bestMeta, let anchor = findOwningAnchor(for: e) {
@@ -1436,15 +1453,17 @@ class ARSessionManager: ObservableObject {
         material.roughness = .init(floatLiteral: 0.8)
         entity.model?.materials = [material]
 
-        // Re-apply collision after material change so tap selection works
-        if let mesh = entity.model?.mesh {
-            entity.collision = CollisionComponent(shapes: [ShapeResource.generateConvex(from: mesh)])
-        }
+        // Use explicit box collision shape — generateConvex can produce
+        // degenerate shapes for thin wall geometry, breaking tap detection
+        let bounds = entity.visualBounds(relativeTo: entity)
+        let box = ShapeResource.generateBox(size: bounds.extents).offsetBy(translation: bounds.center)
+        entity.collision = CollisionComponent(shapes: [box])
 
         // Register for tap-to-inspect
         wallIdCounter += 1
         let wallId = wallIdCounter
         entity.name = "ifc_\(wallId)"
+        log("[WALL] collision set for \(entity.name), bounds=\(bounds)")
 
         let validatedElement = ValidatedElement(
             id: wallId,
@@ -1545,11 +1564,15 @@ class ARSessionManager: ObservableObject {
             if let existing = wallPreviewEntity {
                 // Update mesh in place
                 existing.model = ModelComponent(mesh: mesh, materials: [ghost])
-                existing.collision = CollisionComponent(shapes: [ShapeResource.generateConvex(from: mesh)])
+                let bounds = existing.visualBounds(relativeTo: existing)
+                let box = ShapeResource.generateBox(size: bounds.extents).offsetBy(translation: bounds.center)
+                existing.collision = CollisionComponent(shapes: [box])
             } else {
                 // Create new entity
                 let entity = ModelEntity(mesh: mesh, materials: [ghost])
-                entity.collision = CollisionComponent(shapes: [ShapeResource.generateConvex(from: mesh)])
+                let bounds = entity.visualBounds(relativeTo: entity)
+                let box = ShapeResource.generateBox(size: bounds.extents).offsetBy(translation: bounds.center)
+                entity.collision = CollisionComponent(shapes: [box])
 
                 let anchor: AnchorEntity
                 if let existing = wallPreviewAnchor {
