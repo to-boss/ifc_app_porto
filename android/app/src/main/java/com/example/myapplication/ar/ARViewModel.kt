@@ -17,8 +17,13 @@ class ARViewModel : ViewModel() {
 
     // ── State machine ─────────────────────────────────────────────────────────
 
-    private val _arState = MutableStateFlow(ARState.COACHING)
+    private val _arState = MutableStateFlow(ARState.FLOOR_PLAN)
     val arState: StateFlow<ARState> = _arState.asStateFlow()
+
+    // ── Floor plan ────────────────────────────────────────────────────────────
+
+    private val _floorPlanPoints = MutableStateFlow<List<FloorPlanPoint>>(emptyList())
+    val floorPlanPoints: StateFlow<List<FloorPlanPoint>> = _floorPlanPoints.asStateFlow()
 
     // ── Alignment ─────────────────────────────────────────────────────────────
 
@@ -67,6 +72,12 @@ class ARViewModel : ViewModel() {
     private val _bcfIssues = MutableStateFlow<List<BcfIssue>>(emptyList())
     val bcfIssues: StateFlow<List<BcfIssue>> = _bcfIssues.asStateFlow()
 
+    private val _pendingSnapshotBytes = MutableStateFlow<ByteArray?>(null)
+    val pendingSnapshotBytes: StateFlow<ByteArray?> = _pendingSnapshotBytes.asStateFlow()
+
+    private val _pendingBcfCameraState = MutableStateFlow<BcfCameraState?>(null)
+    val pendingBcfCameraState: StateFlow<BcfCameraState?> = _pendingBcfCameraState.asStateFlow()
+
     // ── Element mutations ─────────────────────────────────────────────────────
 
     private val _deletedElementIds = MutableStateFlow<List<Long>>(emptyList())
@@ -78,8 +89,11 @@ class ARViewModel : ViewModel() {
     // ── Room data ─────────────────────────────────────────────────────────────
 
     private var loadedGlbBytes: ByteArray? = null
-    private var loadedIfcBytes: ByteArray? = null
-    private var loadedIfcModel: IfcModel? = null
+    var loadedIfcBytes: ByteArray? = null
+        private set
+
+    private val _loadedIfcModel = MutableStateFlow<IfcModel?>(null)
+    val loadedIfcModel: StateFlow<IfcModel?> = _loadedIfcModel.asStateFlow()
 
     private val _glbBytes = MutableStateFlow<ByteArray?>(null)
     val glbBytes: StateFlow<ByteArray?> = _glbBytes.asStateFlow()
@@ -103,6 +117,16 @@ class ARViewModel : ViewModel() {
     private val _roomAnchor = MutableStateFlow<Triple<Float, Float, Float>?>(null)
     val roomAnchor: StateFlow<Triple<Float, Float, Float>?> = _roomAnchor.asStateFlow()
 
+    // ── Vertical offset (height adjustment before placement) ──────────────────
+
+    private val _roomYOffset = MutableStateFlow(0f)
+    val roomYOffset: StateFlow<Float> = _roomYOffset.asStateFlow()
+
+    // ── Model transparency (adjustable after placement) ───────────────────────
+
+    private val _modelAlpha = MutableStateFlow(0.5f)
+    val modelAlpha: StateFlow<Float> = _modelAlpha.asStateFlow()
+
     // ── Error state ───────────────────────────────────────────────────────────
 
     private val _errorMessage = MutableStateFlow<String?>(null)
@@ -125,11 +149,83 @@ class ARViewModel : ViewModel() {
     // State machine transitions
     // =========================================================================
 
+    // ── Floor plan ────────────────────────────────────────────────────────────
+
+    fun loadIfcForFloorPlan(context: Context) {
+        viewModelScope.launch(Dispatchers.IO) {
+            if (_loadedIfcModel.value != null) return@launch  // already loaded
+            _isLoading.value = true
+            try {
+                val bytes = context.assets.open("BaseRoom-v2.ifc").readBytes()
+                loadedIfcBytes = bytes
+                _loadedIfcModel.value = IfcBridge.parseIfc(bytes)
+            } catch (e: Exception) {
+                _errorMessage.value = "Failed to load floor plan: ${e.message}"
+            } finally {
+                _isLoading.value = false
+            }
+        }
+    }
+
+    fun addFloorPlanPoint(localX: Float, localZ: Float) {
+        val current = _floorPlanPoints.value
+        if (current.size >= 2) {
+            // Replace first point with new tap (cycle through)
+            _floorPlanPoints.value = listOf(FloorPlanPoint(localX, localZ))
+        } else {
+            _floorPlanPoints.value = current + FloorPlanPoint(localX, localZ)
+        }
+    }
+
+    fun clearFloorPlanPoints() {
+        _floorPlanPoints.value = emptyList()
+    }
+
+    fun startAr() {
+        _arState.value = ARState.COACHING
+    }
+
+    // ── Alignment ─────────────────────────────────────────────────────────────
+
     fun advanceFromCoaching() {
         if (_arState.value == ARState.COACHING) {
             _arState.value = ARState.ALIGNING
             _alignmentPoints.value = emptyList()
         }
+    }
+
+    fun setGlbBytes(bytes: ByteArray) {
+        _glbBytes.value = bytes
+    }
+
+    fun setArState(state: ARState) {
+        _arState.value = state
+    }
+
+    fun computeRoomTransformFromPoints(
+        fp1: FloorPlanPoint, fp2: FloorPlanPoint,
+        ar1: AlignmentPoint, ar2: AlignmentPoint
+    ) {
+        val angleFp = Math.atan2((fp2.localZ - fp1.localZ).toDouble(), (fp2.localX - fp1.localX).toDouble())
+        val angleAr = Math.atan2((ar2.z - ar1.z).toDouble(), (ar2.x - ar1.x).toDouble())
+        val delta = angleAr - angleFp
+        val cosD = Math.cos(delta).toFloat()
+        val sinD = Math.sin(delta).toFloat()
+
+        val fpDx = fp2.localX - fp1.localX
+        val fpDz = fp2.localZ - fp1.localZ
+        val arDx = ar2.x - ar1.x
+        val arDz = ar2.z - ar1.z
+        val fpDist = Math.sqrt((fpDx * fpDx + fpDz * fpDz).toDouble()).toFloat()
+        val arDist = Math.sqrt((arDx * arDx + arDz * arDz).toDouble()).toFloat()
+        val scale = if (fpDist > 0.01f) (arDist / fpDist) else 1.0f
+
+        val rotFp1x = (fp1.localX * cosD - fp1.localZ * sinD) * scale
+        val rotFp1z = (fp1.localX * sinD + fp1.localZ * cosD) * scale
+
+        _roomAnchor.value = Triple(ar1.x - rotFp1x, ar1.y, ar1.z - rotFp1z)
+        _roomRotationY.value = Math.toDegrees(delta).toFloat()
+        _roomScale.value = scale.coerceIn(0.3f, 3.0f)
     }
 
     fun addAlignmentPoint(x: Float, y: Float, z: Float) {
@@ -141,15 +237,21 @@ class ARViewModel : ViewModel() {
     }
 
     fun advanceFromAligning() {
-        if (_arState.value == ARState.ALIGNING && _alignmentPoints.value.size >= 2) {
-            // Compute grid rotation from the two alignment points
-            val p1 = _alignmentPoints.value[0]
-            val p2 = _alignmentPoints.value[1]
-            val dx = p2.x - p1.x
-            val dz = p2.z - p1.z
-            val angle = Math.toDegrees(Math.atan2(dz.toDouble(), dx.toDouble())).toFloat()
-            _gridRotation.value = angle
-            _arState.value = ARState.CALIBRATING
+        if (_arState.value != ARState.ALIGNING) return
+        if (_alignmentPoints.value.size < 2) return
+
+        val p1 = _alignmentPoints.value[0]
+        val p2 = _alignmentPoints.value[1]
+        val dx = p2.x - p1.x
+        val dz = p2.z - p1.z
+        _gridRotation.value = Math.toDegrees(Math.atan2(dz.toDouble(), dx.toDouble())).toFloat()
+
+        val fps = _floorPlanPoints.value
+        if (fps.size >= 2) {
+            computeRoomTransformFromPoints(fps[0], fps[1], p1, p2)
+            _arState.value = ARState.LOADING   // skip CALIBRATING
+        } else {
+            _arState.value = ARState.CALIBRATING  // fallback: manual calibration
         }
     }
 
@@ -179,10 +281,10 @@ class ARViewModel : ViewModel() {
                 loadedGlbBytes = glbBytes
                 _glbBytes.value = glbBytes
 
-                val model = withContext(Dispatchers.IO) {
+                val model = _loadedIfcModel.value ?: withContext(Dispatchers.IO) {
                     IfcBridge.parseIfc(ifcBytes)
                 }
-                loadedIfcModel = model
+                _loadedIfcModel.value = model
 
                 _arState.value = ARState.PREVIEWING
             } catch (e: Exception) {
@@ -201,6 +303,14 @@ class ARViewModel : ViewModel() {
 
     fun setRoomRotationY(rotY: Float) {
         _roomRotationY.value = rotY
+    }
+
+    fun setRoomYOffset(offset: Float) {
+        _roomYOffset.value = offset.coerceIn(-2f, 3f)
+    }
+
+    fun setModelAlpha(alpha: Float) {
+        _modelAlpha.value = alpha.coerceIn(0f, 1f)
     }
 
     fun confirmPlacement(anchorX: Float, anchorY: Float, anchorZ: Float) {
@@ -322,6 +432,14 @@ class ARViewModel : ViewModel() {
 
     fun dismissBcfForm() {
         _showBcfForm.value = false
+        _pendingSnapshotBytes.value = null
+        _pendingBcfCameraState.value = null
+    }
+
+    fun storePendingBcfContext(snapshot: ByteArray?, cam: BcfCameraState?) {
+        _pendingSnapshotBytes.value = snapshot
+        _pendingBcfCameraState.value = cam
+        _showBcfForm.value = true
     }
 
     fun deleteElement(id: Long) {
@@ -391,9 +509,48 @@ class ARViewModel : ViewModel() {
         )
     }
 
-    fun exportBcf(context: Context): String {
-        val file = BCFExporter.exportBcf(context, _bcfIssues.value)
-        return file.absolutePath
+    fun exportBcf(context: Context): java.io.File {
+        return BCFExporter.exportBcf(context, _bcfIssues.value)
+    }
+
+    fun findNearestElement(localX: Float, localZ: Float, threshold: Float = 1.0f): SelectedElement? {
+        val model = _loadedIfcModel.value ?: return null
+        var bestDist = Float.MAX_VALUE
+        var bestElement: SelectedElement? = null
+
+        for (elem in model.elements) {
+            val positions = elem.geometry?.positions ?: continue
+            if (positions.size < 3) continue
+
+            // geometry.positions are already in centered Y-up GLB space (same transform as rendered GLB)
+            val count = positions.size / 3
+            var sumX = 0f
+            var sumZ = 0f
+            for (i in 0 until count) {
+                sumX += positions[i * 3]
+                sumZ += positions[i * 3 + 2]
+            }
+            val cx = sumX / count
+            val cz = sumZ / count
+
+            val dx = cx - localX
+            val dz = cz - localZ
+            val dist = kotlin.math.sqrt((dx * dx + dz * dz).toDouble()).toFloat()
+
+            if (dist < threshold && dist < bestDist) {
+                bestDist = dist
+                bestElement = SelectedElement(
+                    entityId = elem.id.toString(),
+                    ifcId = elem.id.toLong(),
+                    name = elem.name ?: "",
+                    ifcType = elem.ifcType,
+                    globalId = elem.globalId,
+                    properties = elem.properties,
+                    quantities = elem.quantities
+                )
+            }
+        }
+        return bestElement
     }
 
     fun clearError() {

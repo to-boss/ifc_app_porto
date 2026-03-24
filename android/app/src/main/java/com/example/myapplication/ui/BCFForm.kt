@@ -40,7 +40,8 @@ fun BcfFormSheet(
     dirX: Float = 0f,
     dirY: Float = 0f,
     dirZ: Float = -1f,
-    fovDegrees: Float = 60f
+    fovDegrees: Float = 60f,
+    snapshotBytes: ByteArray? = null
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = false)
 
@@ -131,7 +132,7 @@ fun BcfFormSheet(
                         dirZ = dirZ,
                         fovDegrees = fovDegrees,
                         elementGlobalId = elementGlobalId,
-                        snapshotBytes = null
+                        snapshotBytes = snapshotBytes
                     )
                     viewModel.addBcfIssue(issue)
                 },

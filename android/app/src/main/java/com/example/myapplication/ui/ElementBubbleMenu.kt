@@ -29,6 +29,7 @@ import com.example.myapplication.ar.SelectedElement
 fun ElementBubbleMenu(
     element: SelectedElement,
     viewModel: ARViewModel,
+    onReport: () -> Unit = { viewModel.showBcfForm() },
     modifier: Modifier = Modifier
 ) {
     Column(
@@ -72,7 +73,7 @@ fun ElementBubbleMenu(
                 label = "Report",
                 color = Color(0xFFFF9800)
             ) {
-                viewModel.showBcfForm()
+                onReport()
             }
         }
     }

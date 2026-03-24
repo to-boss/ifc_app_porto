@@ -28,8 +28,9 @@ fun GuideCard(
     modifier: Modifier = Modifier
 ) {
     val (stepNumber, instruction) = when (state) {
+        ARState.FLOOR_PLAN -> 0 to "Tap 2 reference points on the floor plan"
         ARState.COACHING -> 1 to "Scan the floor slowly to detect surfaces"
-        ARState.ALIGNING -> 2 to "Tap two points on the floor edge to align the room ($alignmentPointCount/2)"
+        ARState.ALIGNING -> 2 to "Tap the 2 real-world points you marked on the floor plan ($alignmentPointCount/2)"
         ARState.CALIBRATING -> 3 to "Rotate with two fingers to fine-tune alignment"
         ARState.LOADING -> 4 to "Loading IFC model..."
         ARState.PREVIEWING -> 5 to "Move the phone to position the room, then tap Place"

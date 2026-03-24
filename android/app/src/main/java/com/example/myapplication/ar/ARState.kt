@@ -4,6 +4,7 @@ import com.example.myapplication.ffi.IfcProperty
 import com.example.myapplication.ffi.IfcQuantity
 
 enum class ARState {
+    FLOOR_PLAN,
     COACHING,
     ALIGNING,
     CALIBRATING,
@@ -18,6 +19,8 @@ enum class ARState {
 }
 
 data class AlignmentPoint(val x: Float, val y: Float, val z: Float)
+
+data class FloorPlanPoint(val localX: Float, val localZ: Float)
 
 data class PlacedFixture(
     val name: String,
@@ -74,4 +77,14 @@ data class SelectedElement(
     val globalId: String?,
     val properties: List<IfcProperty>,
     val quantities: List<IfcQuantity>
+)
+
+data class BcfCameraState(
+    val cameraX: Float,
+    val cameraY: Float,
+    val cameraZ: Float,
+    val dirX: Float,
+    val dirY: Float,
+    val dirZ: Float,
+    val fovDegrees: Float
 )
